@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/CMakeFiles/imgui-populate"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/CMakeFiles/imgui-populate.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/CMakeFiles/imgui-populate-complete.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/imgui-populate-prefix/src/imgui-populate-stamp/imgui-populate-build.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/imgui-populate-prefix/src/imgui-populate-stamp/imgui-populate-configure.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/imgui-populate-prefix/src/imgui-populate-stamp/imgui-populate-download.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/imgui-populate-prefix/src/imgui-populate-stamp/imgui-populate-install.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/imgui-populate-prefix/src/imgui-populate-stamp/imgui-populate-mkdir.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/imgui-populate-prefix/src/imgui-populate-stamp/imgui-populate-patch.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/imgui-populate-prefix/src/imgui-populate-stamp/imgui-populate-test.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/imgui-populate-prefix/src/imgui-populate-stamp/imgui-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"imgui-populate"
+		],
+		"name" : "imgui-populate"
+	}
+}

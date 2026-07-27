@@ -1,0 +1,1 @@
+-I/workspaces/ZweiFoil/ZweiFoil/include -I"/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/raylib-src/src" -I"/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-src" -I"/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-src"

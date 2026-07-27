@@ -1,0 +1,16 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/eigen-src/test/ctorleak.cpp"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"BuildOfficial"
+		],
+		"name" : "ctorleak"
+	}
+}

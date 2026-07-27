@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/CMakeFiles/rlimgui-populate"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/CMakeFiles/rlimgui-populate.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/CMakeFiles/rlimgui-populate-complete.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/rlimgui-populate-prefix/src/rlimgui-populate-stamp/rlimgui-populate-build.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/rlimgui-populate-prefix/src/rlimgui-populate-stamp/rlimgui-populate-configure.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/rlimgui-populate-prefix/src/rlimgui-populate-stamp/rlimgui-populate-download.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/rlimgui-populate-prefix/src/rlimgui-populate-stamp/rlimgui-populate-install.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/rlimgui-populate-prefix/src/rlimgui-populate-stamp/rlimgui-populate-mkdir.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/rlimgui-populate-prefix/src/rlimgui-populate-stamp/rlimgui-populate-patch.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/rlimgui-populate-prefix/src/rlimgui-populate-stamp/rlimgui-populate-test.rule"
+		},
+		{
+			"file" : "/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/rlimgui-populate-prefix/src/rlimgui-populate-stamp/rlimgui-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"rlimgui-populate"
+		],
+		"name" : "rlimgui-populate"
+	}
+}

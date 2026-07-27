@@ -1,0 +1,2 @@
+/usr/bin/x86_64-w64-mingw32-ar qc libimgui_static.a "CMakeFiles/imgui_static.dir/_deps/imgui-src/imgui.cpp.obj" "CMakeFiles/imgui_static.dir/_deps/imgui-src/imgui_draw.cpp.obj" "CMakeFiles/imgui_static.dir/_deps/imgui-src/imgui_tables.cpp.obj" "CMakeFiles/imgui_static.dir/_deps/imgui-src/imgui_widgets.cpp.obj"
+/usr/bin/x86_64-w64-mingw32-ranlib libimgui_static.a

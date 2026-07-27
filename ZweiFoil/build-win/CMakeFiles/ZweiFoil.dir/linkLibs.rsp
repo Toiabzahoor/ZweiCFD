@@ -1,0 +1,1 @@
+ "_deps/raylib-build/raylib/libraylib.a" libimgui_static.a librlImGui_static.a "_deps/raylib-build/raylib/libraylib.a" -lopengl32 -lglu32 -lwinmm -lpthread libimgui_static.a -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 

@@ -1,0 +1,3 @@
+/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/CMakeFiles/rlimgui-populate.dir
+/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/CMakeFiles/edit_cache.dir
+/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/rlimgui-subbuild/CMakeFiles/rebuild_cache.dir

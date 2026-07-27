@@ -1,0 +1,3 @@
+/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/CMakeFiles/imgui-populate.dir
+/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/CMakeFiles/edit_cache.dir
+/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/imgui-subbuild/CMakeFiles/rebuild_cache.dir
