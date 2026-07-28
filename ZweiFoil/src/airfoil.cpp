@@ -1,5 +1,7 @@
 #include "ZweiFoil/airfoil.hpp"
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <cmath>
 
 
@@ -7,20 +9,61 @@ namespace zweifoil {
 
 Airfoil::Airfoil() : name("unknown") {}
 
+static void loadDummyDiamond(std::string& name, std::vector<Point2D>& coordinates) {
+    name = "NACA 0012 (Test)";
+    coordinates = {
+        Point2D{1.0, 0.0},
+        Point2D{0.5, 0.1},
+        Point2D{0.0, 0.0},
+        Point2D{0.5, -0.1},
+        Point2D{1.0, 0.0}
+    };
+}
+
 bool Airfoil::loadFromFile(const std::string& filename) {
 
     std::cout << "Loading airfoil coords from: " << filename << "...\n";
 
-    name = "NACA 0012 (Test)";
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "  Could not open '" << filename << "', using dummy airfoil instead.\n";
+        loadDummyDiamond(name, coordinates);
+        generatePanels();
+        return true;
+    }
 
-    coordinates = {
-        Point2D{1.0, 0.0}, 
-        Point2D{0.5, 0.1}, 
-        Point2D{0.0, 0.0}, 
-        Point2D{0.5, -0.1}, 
-        Point2D{1.0, 0.0}
-    };
-    
+    std::vector<Point2D> parsed;
+    std::string line;
+    bool firstLine = true;
+    std::string parsedName;
+
+    while (std::getline(file, line)) {
+        size_t start = line.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) continue;
+        size_t end = line.find_last_not_of(" \t\r\n");
+        std::string trimmed = line.substr(start, end - start + 1);
+
+        std::istringstream iss(trimmed);
+        double x, y;
+        if (iss >> x >> y) {
+            parsed.push_back(Point2D{x, y});
+        } else if (firstLine) {
+            parsedName = trimmed;
+        }
+        firstLine = false;
+    }
+
+    if (parsed.size() < 3) {
+        std::cerr << "  File '" << filename << "' had too few coordinate points ("
+                  << parsed.size() << "), using dummy airfoil instead.\n";
+        loadDummyDiamond(name, coordinates);
+        generatePanels();
+        return true;
+    }
+
+    name = parsedName.empty() ? filename : parsedName;
+    coordinates = parsed;
+
     generatePanels();
     return true;
 }
