@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/ZweiFoil.dir/src/main.cpp.o CMakeFiles/ZweiFoil.dir/src/airfoil.cpp.o CMakeFiles/ZweiFoil.dir/src/solver.cpp.o -o ZweiFoil 

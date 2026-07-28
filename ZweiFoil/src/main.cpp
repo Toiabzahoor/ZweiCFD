@@ -65,22 +65,50 @@ int main(int argc, char* argv[]) {
         ClearBackground(RAYWHITE);
         
         BeginMode2D(camera);
-            DrawGrid(100, 50.0f);
+        DrawGrid(100, 50.0f);
 
-        //drawing airfoil panels
         float renderScale = 400.0f;
 
         for (const auto& panel : foil.getPanels()) {
-            Vector2 p1 = { (float)(panel.p1.x * renderScale), (float)(-panel.p1.y * renderScale) };
-            Vector2 p2 = { (float)(panel.p2.x * renderScale), (float)(-panel.p2.y * renderScale) };
-            Vector2 cp = { (float)(panel.cp.x * renderScale), (float)(-panel.cp.y * renderScale) };
+            Vector2 p1 = { (float)(panel.p1.x * renderScale), (float)(-panel.p1.y * renderScale)};
+            Vector2 p2 = { (float)(panel.p2.x * renderScale), (float)(-panel.p2.y * renderScale)};
+            Vector2 cp = { (float)(panel.cp.x * renderScale), (float)(-panel.cp.y * renderScale)};
+
             DrawLineEx(p1, p2, 3.0f, DARKBLUE);
             DrawCircleV(cp, 2.0f, DARKGREEN);
-
-            float normalLineLength = 15.0f;
-            Vector2 normalEnd = { cp.x + (float)(panel.normal.x * normalLineLength), cp.y - (float)(panel.normal.y * normalLineLength) };
-            DrawLineEx(cp, normalEnd, 2.0f, RED);
         }
+
+        const Eigen::VectorXd& gamma = solver.getGammaDistribution();
+        if (gamma.size() > 0) {
+            const auto& panels = foil.getPanels();
+            float gammaDisplayScale = 30.0f;
+
+            for (size_t i = 0; i < panels.size(); ++i) {
+                Vector2 nodePos = { (float)(panels[i].p1.x * renderScale), (float)(-panels[i].p1.y * renderScale)};
+
+                float gVal = static_cast<float>(gamma(i));
+                Vector2 gEnd = {
+                    nodePos.x + (float)(panels[i].normal.x * gVal * gammaDisplayScale),
+                    nodePos.y + (float)(-panels[i].normal.y * gVal * gammaDisplayScale)
+                };
+
+                Color gColor = (gVal >= 0.0f) ? RED : BLUE;
+                DrawLineEx(nodePos, gEnd, 2.0f, gColor);
+                DrawCircleV(gEnd, 3.0f, gColor);
+            }
+
+            size_t lastNode = panels.size();
+            Vector2 lastPos = { (float)(panels.back().p2.x * renderScale), (float)(-panels.back().p2.y * renderScale)};
+            float gValLast = static_cast<float>(gamma(lastNode));
+            Vector2 gEndLast = {
+                lastPos.x + (float)(panels.back().normal.x * gValLast * gammaDisplayScale),
+                lastPos.y + (float)(-panels.back().normal.y * gValLast * gammaDisplayScale)
+            };
+            Color gColorLast = (gValLast >= 0.0f) ? RED : BLUE;
+            DrawLineEx(lastPos, gEndLast, 2.0f, gColorLast);
+            DrawCircleV(gEndLast, 3.0f, gColorLast);
+        }
+
         EndMode2D();
         
         rlImGuiBegin();

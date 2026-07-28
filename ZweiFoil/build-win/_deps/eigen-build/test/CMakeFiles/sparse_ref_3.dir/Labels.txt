@@ -1,4 +1,0 @@
-# Target labels
- BuildOfficial
-# Source files and their labels
-/workspaces/ZweiFoil/ZweiFoil/build-win/_deps/eigen-src/test/sparse_ref.cpp

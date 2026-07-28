@@ -1,3 +1,0 @@
-/workspaces/ZweiFoil/ZweiFoil/build/CMakeFiles/ZweiFoil.dir
-/workspaces/ZweiFoil/ZweiFoil/build/CMakeFiles/edit_cache.dir
-/workspaces/ZweiFoil/ZweiFoil/build/CMakeFiles/rebuild_cache.dir

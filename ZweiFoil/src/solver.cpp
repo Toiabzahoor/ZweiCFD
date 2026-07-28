@@ -1,15 +1,18 @@
-#include "ZweiFoil/solver.hpp"
+#include "ZweiFoil/solver.hpp" 
 #include <iostream>
 
-namespace zweifoil {
+namespace zweifoil { 
 
-Solver::Solver(const Airfoil& airfoil) : targetAirfoil(airfoil) {}
+Solver::Solver(const Airfoil& airfoil) 
+    : targetAirfoil(airfoil), inviscidEngine(std::make_unique<InviscidLVPM>(airfoil)) {} 
 
-Coefficients Solver::runInviscid(const Flowconditions& conditions) {
-    std::cout << "Running inviscid solver at alpha = " << conditions.alpha << " degrees...\n";
-
-    //test coeffs for now
-    Coefficients coeffs = {0.0,0.0,0.0};
-    return coeffs;
+Coefficients Solver::runInviscid(const Flowconditions& conditions) {     
+    std::cout << "Running LVPM inviscid solver at alpha = " << conditions.alpha << " degrees...\n";     
+    return inviscidEngine->solve(conditions);
 }
+
+const Eigen::VectorXd& Solver::getGammaDistribution() const {     
+    return inviscidEngine->getGammaDistribution(); 
+}
+
 }

@@ -68,9 +68,11 @@ add_executable(ZweiFoil
     src/main.cpp
     src/airfoil.cpp
     src/solver.cpp
+    src/inviscid_lvpm.cpp
 )
 target_include_directories(ZweiFoil PRIVATE
     ${raylib_SOURCE_DIR}/src
+    ${eigen_SOURCE_DIR}
 )
 FetchContent_Declare(
     eigen
@@ -79,8 +81,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(eigen)
 
-target_link_libraries(ZweiFoil PRIVATE raylib imgui_static rlImGui_static)
-
+target_link_libraries(ZweiFoil PRIVATE raylib imgui_static rlImGui_static Eigen3::Eigen)
 
 if(MINGW OR WIN32)
     target_link_options(ZweiFoil PRIVATE -static -static-libgcc -static-libstdc++)

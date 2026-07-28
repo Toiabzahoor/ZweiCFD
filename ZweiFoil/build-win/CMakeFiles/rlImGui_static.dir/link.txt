@@ -1,2 +1,0 @@
-/usr/bin/x86_64-w64-mingw32-ar qc librlImGui_static.a "CMakeFiles/rlImGui_static.dir/_deps/rlimgui-src/rlImGui.cpp.obj"
-/usr/bin/x86_64-w64-mingw32-ranlib librlImGui_static.a

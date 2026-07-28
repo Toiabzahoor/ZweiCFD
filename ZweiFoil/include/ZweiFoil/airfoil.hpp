@@ -21,8 +21,8 @@ struct Panel {
 class Airfoil {
 public:
     Airfoil();
-
-    //loading airfoil coords from file
+    //loading airfoil coords from file (not done properly yet).
+    
     bool loadFromFile(const std::string& filename);
 
     void generatePanels(); //generate panels from coordinates

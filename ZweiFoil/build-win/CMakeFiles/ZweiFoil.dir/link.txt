@@ -1,3 +1,0 @@
-/usr/bin/cmake -E rm -f CMakeFiles/ZweiFoil.dir/objects.a
-/usr/bin/x86_64-w64-mingw32-ar qc CMakeFiles/ZweiFoil.dir/objects.a @CMakeFiles/ZweiFoil.dir/objects1.rsp
-/usr/bin/x86_64-w64-mingw32-g++ -static -static-libgcc -static-libstdc++ -Wl,--whole-archive CMakeFiles/ZweiFoil.dir/objects.a -Wl,--no-whole-archive -o ZweiFoil.exe -Wl,--out-implib,libZweiFoil.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles/ZweiFoil.dir/linkLibs.rsp

@@ -1,28 +1,31 @@
-#pragma once
-#include "ZweiFoil/airfoil.hpp"
+#pragma once 
+#include "ZweiFoil/airfoil.hpp" 
+#include "ZweiFoil/inviscid_lvpm.hpp"
+#include <memory>
 
-namespace zweifoil {
+namespace zweifoil { 
 
-struct Flowconditions {
-    double alpha; //AOA in deg
-    double V_inf; //freestream velocity
+struct Flowconditions {     
+    double alpha; //AOA in deg     
+    double V_inf; //freestream velocity 
 };
 
-struct Coefficients{
-    double cl; //lift coeff.
-    double cd; //drag coeff
-    double cm; //moment coeff.
-
+struct Coefficients{     
+    double cl; //lift coeff.     
+    double cd; //drag coeff     
+    double cm; //moment coeff. 
 };
 
-class Solver {
-public:
-    Solver(const Airfoil& airfoil);
+class Solver { 
+public:     
+    Solver(const Airfoil& airfoil);     
+    Coefficients runInviscid(const Flowconditions& conditions); 
 
-    Coefficients runInviscid(const Flowconditions& conditions);
-private:
-    Airfoil targetAirfoil;
+    const Eigen::VectorXd& getGammaDistribution() const;
 
+private:     
+    Airfoil targetAirfoil; 
+    std::unique_ptr<InviscidLVPM> inviscidEngine;
 };
 
 }
