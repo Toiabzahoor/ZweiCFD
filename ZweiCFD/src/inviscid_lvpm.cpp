@@ -76,7 +76,7 @@ void InviscidLVPM::calculateInfluenceCoefficients(Eigen::MatrixXd& A, Eigen::Vec
                 while (d_theta > M_PI) d_theta -= 2.0 * M_PI;
                 while (d_theta < -M_PI) d_theta += 2.0 * M_PI;
 
-                double term1 = 0.5 * std::log(r1 / r2);
+                double term1 = std::log(r1 / r2);
 
                 double u1 = (z * term1 + x * d_theta) / (2.0 * M_PI);
                 double w1 = (z * d_theta - x * term1 - S) / (2.0 * M_PI);
