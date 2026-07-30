@@ -1,27 +1,27 @@
-#pragma once
-#include "ZweiFoil/airfoil.hpp"
-//eigen for Linear algebra
-#include <Eigen/Dense>
+#pragma once 
+#include "ZweiFoil/airfoil.hpp" 
+#include <Eigen/Dense> 
 
-namespace zweifoil {
+namespace zweifoil { 
 
-// Forward declarations
-struct Flowconditions;
-struct Coefficients;
+struct Flowconditions; 
+struct Coefficients; 
 
-//calculating inviscid before we add viscid effects
+class InviscidLVPM { 
+public: 
+    InviscidLVPM(const Airfoil& airfoil); 
+         
+    Coefficients solve(const Flowconditions& conditions); 
+    const Eigen::VectorXd& getGammaDistribution() const { return gamma; } 
 
-class InviscidLVPM {
-public:
-    InviscidLVPM(const Airfoil& airfoil);
+    Point2D getVelocityAt(const Point2D& pos, const Flowconditions& conditions) const;
     
-    Coefficients solve(const Flowconditions& conditions);
-    const Eigen::VectorXd& getGammaDistribution() const { return gamma; }
+    bool isInsideAirfoil(const Point2D& pos) const;
 
-private:
-    const Airfoil& targetAirfoil;
-    Eigen::VectorXd gamma;
-    void calculateInfluenceCoefficients(Eigen::MatrixXd& A, Eigen::VectorXd& b, const Flowconditions& conditions);
+private: 
+    const Airfoil& targetAirfoil; 
+    Eigen::VectorXd gamma; 
+    void calculateInfluenceCoefficients(Eigen::MatrixXd& A, Eigen::VectorXd& b, const Flowconditions& conditions); 
 };
 
-}
+} 
