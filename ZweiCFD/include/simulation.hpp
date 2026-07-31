@@ -17,7 +17,7 @@ struct WindParticle {
 };
 
 struct WindSystem {
-    static constexpr int MAX_PARTICLES = 8000;
+    static constexpr int MAX_PARTICLES = 16000;
     WindParticle particles[MAX_PARTICLES];
     int activeCount = 0;
 };
@@ -32,8 +32,10 @@ private:
     float randFloat(float min, float max);
     Vector2 getWindArrowAngle(int windDir);
     void spawnParticle(WindParticle& p, int windDirection, const Vector2& spawnTL, const Vector2& spawnBR);
+    void rebuildSolverWithRotation();
 
     zweifoil::Airfoil foil;
+    zweifoil::Airfoil rotatedFoil;
     zweifoil::Flowconditions flow;
     std::unique_ptr<zweifoil::Solver> solver;
     zweifoil::Coefficients results;

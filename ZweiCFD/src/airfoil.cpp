@@ -125,4 +125,21 @@ void Airfoil::generatePanels() {
     std::cout << "Generated " << panels.size() << " panels for airfoil: " << name << "\n";
 }
 
+void Airfoil::rotateCoordinates(double angleDeg) {
+    double angleRad = angleDeg * M_PI / 180.0;
+    double cosA = std::cos(angleRad);
+    double sinA = std::sin(angleRad);
+
+    double cx = 0.25, cy = 0.0;
+
+    for (auto& pt : coordinates) {
+        double dx = pt.x - cx;
+        double dy = pt.y - cy;
+        pt.x = cx + dx * cosA - dy * sinA;
+        pt.y = cy + dx * sinA + dy * cosA;
+    }
+
+    generatePanels();
+}
+
 }

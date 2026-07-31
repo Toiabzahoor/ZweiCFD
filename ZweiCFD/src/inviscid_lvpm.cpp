@@ -31,28 +31,27 @@ Coefficients InviscidLVPM::solve(const Flowconditions& conditions) {
     double cd = 0.0;          
     double cm = 0.0;  
 
+    precomputeVelocityGrid(conditions);
     return {cl, cd, cm}; 
 } 
 
-// Helper: get freestream velocity vector based on wind direction and AoA
 static void getFreestreamVelocity(double V_inf, double alpha_deg, int windDir, double& Vx, double& Vy) {
     double alpha_rad = alpha_deg * (M_PI / 180.0);
     Vx = V_inf * std::cos(alpha_rad);
     Vy = V_inf * std::sin(alpha_rad);
 
-    // Apply wind direction rotation
     switch (windDir) {
-        case 1: // From Right -> blows left
+        case 1: 
             Vx = -Vx;
             Vy = -Vy;
             break;
-        case 2: // From Top -> blows downward (in sim coords: -y)
+        case 2: 
             { double temp = Vx; Vx = Vy; Vy = -temp; }
             break;
-        case 3: // From Bottom -> blows upward (in sim coords: +y)
+        case 3: 
             { double temp = Vx; Vx = -Vy; Vy = temp; }
             break;
-        default: // case 0: From Left -> blows right (default)
+        default: 
             break;
     }
 }
@@ -65,15 +64,15 @@ void InviscidLVPM::calculateInfluenceCoefficients(Eigen::MatrixXd& A, Eigen::Vec
     getFreestreamVelocity(conditions.V_inf, conditions.alpha, conditions.windDirection, V_x, V_y);
 
     for (int i = 0; i < N; ++i) { 
-        b(i) = -(V_x * panels[i].tangent.x + V_y * panels[i].tangent.y); 
+        b(i) = -(V_x * panels[i].normal.x + V_y * panels[i].normal.y); 
 
         for (int j = 0; j < N; ++j) { 
             double inf_node1 = 0.0;  
             double inf_node2 = 0.0;  
                          
             if (i == j) { 
-                inf_node1 = -0.25; 
-                inf_node2 = -0.25; 
+                inf_node1 = -1.0 / (2.0 * M_PI);
+                inf_node2 =  1.0 / (2.0 * M_PI);
             } else { 
                 double xi = panels[i].cp.x; 
                 double yi = panels[i].cp.y; 
@@ -99,17 +98,11 @@ void InviscidLVPM::calculateInfluenceCoefficients(Eigen::MatrixXd& A, Eigen::Vec
 
                 double term1 = std::log(r1 / r2); 
 
-                double u1 = (z * term1 + x * d_theta) / (2.0 * M_PI); 
-                double w1 = (z * d_theta - x * term1 - S) / (2.0 * M_PI); 
-                                 
-                double u2 = (z * term1 + (x - S) * d_theta) / (2.0 * M_PI); 
-                double w2 = (z * d_theta - (x - S) * term1 + S) / (2.0 * M_PI); 
+                double u_node1 = ((S - x) * d_theta + z * term1) / (2.0 * M_PI * S);
+                double w_node1 = -((S - x) * term1 + S - z * d_theta) / (2.0 * M_PI * S);
 
-                double u_node1 = -u1 + u2 * (x / S) + w2 * (z / S); 
-                double w_node1 = -w1 + u2 * (z / S) - w2 * (x / S); 
-                                 
-                double u_node2 = -u2 * (x / S) - w2 * (z / S); 
-                double w_node2 = -u2 * (z / S) + w2 * (x / S); 
+                double u_node2 = (x * d_theta - z * term1) / (2.0 * M_PI * S);
+                double w_node2 = -(x * term1 - S + z * d_theta) / (2.0 * M_PI * S); 
 
                 double U_node1 = u_node1 * std::cos(thetaj) - w_node1 * std::sin(thetaj); 
                 double W_node1 = u_node1 * std::sin(thetaj) + w_node1 * std::cos(thetaj); 
@@ -117,8 +110,8 @@ void InviscidLVPM::calculateInfluenceCoefficients(Eigen::MatrixXd& A, Eigen::Vec
                 double U_node2 = u_node2 * std::cos(thetaj) - w_node2 * std::sin(thetaj); 
                 double W_node2 = u_node2 * std::sin(thetaj) + w_node2 * std::cos(thetaj); 
 
-                inf_node1 = U_node1 * panels[i].tangent.x + W_node1 * panels[i].tangent.y; 
-                inf_node2 = U_node2 * panels[i].tangent.x + W_node2 * panels[i].tangent.y; 
+                inf_node1 = U_node1 * panels[i].normal.x + W_node1 * panels[i].normal.y; 
+                inf_node2 = U_node2 * panels[i].normal.x + W_node2 * panels[i].normal.y; 
             } 
             A(i, j) += inf_node1; 
             A(i, j + 1) += inf_node2; 
@@ -129,7 +122,7 @@ void InviscidLVPM::calculateInfluenceCoefficients(Eigen::MatrixXd& A, Eigen::Vec
     b(N) = 0.0; 
 } 
 
-Point2D InviscidLVPM::getVelocityAt(const Point2D& pos, const Flowconditions& conditions) const {
+Point2D InviscidLVPM::getExactVelocityAt(const Point2D& pos, const Flowconditions& conditions) const {
     double V_x, V_y;
     getFreestreamVelocity(conditions.V_inf, conditions.alpha, conditions.windDirection, V_x, V_y);
 
@@ -152,11 +145,10 @@ Point2D InviscidLVPM::getVelocityAt(const Point2D& pos, const Flowconditions& co
         double x = (xi - xj) * std::cos(thetaj) + (yi - yj) * std::sin(thetaj);
         double z = -(xi - xj) * std::sin(thetaj) + (yi - yj) * std::cos(thetaj);
         
-        // Avoid singularity very close to panel surface
         double minDist = 1e-4;
         if (std::abs(z) < minDist && x >= 0.0 && x <= S) {
-            if (std::abs(z) < 1e-6) continue; // skip exactly on panel
-            z = (z < 0) ? -minDist : minDist; // nudge away
+            if (std::abs(z) < 1e-6) continue;
+            z = (z < 0) ? -minDist : minDist;
         }
 
         double r1 = std::sqrt(x * x + z * z);
@@ -171,15 +163,11 @@ Point2D InviscidLVPM::getVelocityAt(const Point2D& pos, const Flowconditions& co
         
         double term1 = std::log(r1 / r2);
         
-        double u1 = (z * term1 + x * d_theta) / (2.0 * M_PI);
-        double w1 = (z * d_theta - x * term1 - S) / (2.0 * M_PI);
-        double u2 = (z * term1 + (x - S) * d_theta) / (2.0 * M_PI);
-        double w2 = (z * d_theta - (x - S) * term1 + S) / (2.0 * M_PI);
-        
-        double u_node1 = -u1 + u2 * (x / S) + w2 * (z / S);
-        double w_node1 = -w1 + u2 * (z / S) - w2 * (x / S);
-        double u_node2 = -u2 * (x / S) - w2 * (z / S);
-        double w_node2 = -u2 * (z / S) + w2 * (x / S);
+        double u_node1 = ((S - x) * d_theta + z * term1) / (2.0 * M_PI * S);
+        double w_node1 = -((S - x) * term1 + S - z * d_theta) / (2.0 * M_PI * S);
+
+        double u_node2 = (x * d_theta - z * term1) / (2.0 * M_PI * S);
+        double w_node2 = -(x * term1 - S + z * d_theta) / (2.0 * M_PI * S);
         
         double U_node1 = u_node1 * std::cos(thetaj) - w_node1 * std::sin(thetaj);
         double W_node1 = u_node1 * std::sin(thetaj) + w_node1 * std::cos(thetaj);
@@ -191,6 +179,28 @@ Point2D InviscidLVPM::getVelocityAt(const Point2D& pos, const Flowconditions& co
     }
     
     return {U, W};
+}
+
+Point2D InviscidLVPM::getVelocityAt(const Point2D& pos, const Flowconditions& conditions) const {
+    if (pos.x >= cachedGrid.minX && pos.x <= cachedGrid.maxX &&
+        pos.y >= cachedGrid.minY && pos.y <= cachedGrid.maxY) {
+        return cachedGrid.interpolate(pos);
+    }
+    
+    return getExactVelocityAt(pos, conditions);
+}
+
+void InviscidLVPM::precomputeVelocityGrid(const Flowconditions& conditions) {
+    std::cout << "Precomputing velocity grid (" << cachedGrid.nx << "x" << cachedGrid.ny << ")...\n";
+    cachedGrid.grid.resize(cachedGrid.nx * cachedGrid.ny);
+    
+    for (int j = 0; j < cachedGrid.ny; ++j) {
+        double y = cachedGrid.minY + j * cachedGrid.dy;
+        for (int i = 0; i < cachedGrid.nx; ++i) {
+            double x = cachedGrid.minX + i * cachedGrid.dx;
+            cachedGrid.grid[j * cachedGrid.nx + i] = getExactVelocityAt(Point2D{x, y}, conditions);
+        }
+    }
 }
 
 // Ray casting algorithm to check if a point is inside the airfoil polygon

@@ -26,6 +26,7 @@ public:
     bool loadFromFile(const std::string& filename);
 
     void generatePanels(); //generate panels from coordinates
+    void rotateCoordinates(double angleDeg);
 
     const std::vector<Point2D>& getCoordinates() const { return coordinates; }
     const std::vector<Panel>& getPanels() const { return panels; }

@@ -87,3 +87,10 @@ target_link_libraries(ZweiFoil PRIVATE raylib imgui_static rlImGui_static Eigen3
 if(MINGW OR WIN32)
     target_link_options(ZweiFoil PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
+
+add_custom_command(TARGET ZweiFoil POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_CURRENT_SOURCE_DIR}/../naca0012.dat"
+    $<TARGET_FILE_DIR:ZweiFoil>
+    VERBATIM
+)

@@ -1,2 +1,34 @@
-/workspaces/ZweiFoil/ZweiFoil/build-win/
-/workspaces/ZweiFoil/ZweiFoil/build/
+# CMake
+**/build/
+**/build-win/
+**/out/
+**/bin/
+**/lib/
+
+# Dependencies
+**/third_party/
+**/deps/
+
+# Logs & Data
+**/logs/
+**/output/
+**/*.log
+**/*.txt
+**/*.csv
+
+# Temporary files
+**/*.tmp
+**/*.swp
+**/.*.swp
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+
+# Cache
+**/__pycache__/
+**/cache/

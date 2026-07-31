@@ -10,7 +10,7 @@
 Simulation::Simulation(int argc, char* argv[]) {
     std::cout << "==== ZweiCFD v0.4   Streamlines & Viscous Flow ====\n";
 
-    std::string filename = (argc >= 2) ? argv[1] : "dummy.dat";
+    std::string filename = (argc >= 2) ? argv[1] : "naca0012.dat";
     if (!foil.loadFromFile(filename)) {
         std::cerr << "Failed to load Airfoil Data!.\n";
     } else {
@@ -22,8 +22,7 @@ Simulation::Simulation(int argc, char* argv[]) {
     flow.kinematic_viscosity = 1.5e-5;
     flow.windDirection = 0;
 
-    solver = std::make_unique<zweifoil::Solver>(foil);
-    results = solver->runSimulation(flow);
+    rebuildSolverWithRotation();
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
     InitWindow(1280, 720, "ZweiCFD Engine");
@@ -98,6 +97,16 @@ void Simulation::spawnParticle(WindParticle& p, int windDirection, const Vector2
     p.prevPos = p.pos;
 }
 
+void Simulation::rebuildSolverWithRotation() {
+    rotatedFoil = foil;
+    rotatedFoil.rotateCoordinates(-flow.alpha);
+    solver = std::make_unique<zweifoil::Solver>(rotatedFoil);
+
+    zweifoil::Flowconditions solverFlow = flow;
+    solverFlow.alpha = 0.0;
+    results = solver->runSimulation(solverFlow);
+}
+
 void Simulation::run() {
     const float renderScale = 400.0f;
 
@@ -152,12 +161,21 @@ void Simulation::run() {
             p.prevPos = p.pos;
             p.age += dt;
 
-            float norm_U = windArrowDir.x;
-            float norm_W = -windArrowDir.y; 
-            
-            float step = baseSpeed * speedScale * p.speedJitter * dt;
-            p.pos.x += norm_U * step;
-            p.pos.y -= norm_W * step;
+            zweifoil::Point2D physPos = { p.pos.x / renderScale, -p.pos.y / renderScale };
+
+            if (solver->isInsideAirfoil(physPos)) {
+                p.active = false;
+                wind.activeCount--;
+                continue;
+            }
+
+            zweifoil::Flowconditions solverFlow = flow;
+            solverFlow.alpha = 0.0;
+            zweifoil::Point2D vel = solver->getVelocityAt(physPos, solverFlow);
+
+            float stepScale = baseSpeed * p.speedJitter * dt / std::max(0.1f, (float)flow.V_inf);
+            p.pos.x += (float)vel.x * stepScale;
+            p.pos.y -= (float)vel.y * stepScale;
 
             if (p.pos.x < killTL.x || p.pos.x > killBR.x ||
                 p.pos.y < killTL.y || p.pos.y > killBR.y) {
@@ -206,7 +224,7 @@ void Simulation::run() {
         
         EndBlendMode();
 
-        for (const auto& panel : foil.getPanels()) {
+        for (const auto& panel : rotatedFoil.getPanels()) {
             Vector2 p1 = { (float)(panel.p1.x * renderScale), (float)(-panel.p1.y * renderScale)};
             Vector2 p2 = { (float)(panel.p2.x * renderScale), (float)(-panel.p2.y * renderScale)};
             DrawLineEx(p1, p2, 6.0f, ColorAlpha((Color){80, 120, 150, 100}, 0.4f));
@@ -236,8 +254,7 @@ void Simulation::run() {
                 ImGui::InputText("##file", fileBuf, 256);
                 if (ImGui::MenuItem("Load")) {
                     if (foil.loadFromFile(fileBuf)) {
-                        solver = std::make_unique<zweifoil::Solver>(foil);
-                        results = solver->runSimulation(flow);
+                        rebuildSolverWithRotation();
                         for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i)
                             wind.particles[i].active = false;
                         wind.activeCount = 0;
@@ -257,7 +274,7 @@ void Simulation::run() {
                     if (ImGui::MenuItem(dirNames[d], "", flow.windDirection == d)) {
                         flow.windDirection = d;
                         windArrowDir = getWindArrowAngle(d);
-                        results = solver->runSimulation(flow);
+                        rebuildSolverWithRotation();
                         for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i)
                             wind.particles[i].active = false;
                         wind.activeCount = 0;
@@ -297,10 +314,10 @@ void Simulation::run() {
                 flow.kinematic_viscosity = kin_visc; changed = true;
             }
 
-            if (changed) results = solver->runSimulation(flow);
+            if (changed) rebuildSolverWithRotation();
 
             if (ImGui::Button("Compute Flow")) {
-                results = solver->runSimulation(flow);
+                rebuildSolverWithRotation();
                 std::cout << "\nResults:\n"
                           << " Cl: " << results.cl << "\n"
                           << " Cd: " << results.cd << "\n"
