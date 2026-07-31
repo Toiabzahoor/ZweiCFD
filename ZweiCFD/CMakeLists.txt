@@ -68,6 +68,7 @@ add_executable(ZweiFoil
     src/main.cpp
     src/airfoil.cpp
     src/solver.cpp
+    src/simulation.cpp
     src/inviscid_lvpm.cpp
 )
 target_include_directories(ZweiFoil PRIVATE
