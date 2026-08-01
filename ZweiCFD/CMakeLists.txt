@@ -83,7 +83,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(eigen)
 
-target_link_libraries(ZweiFoil PRIVATE raylib imgui_static rlImGui_static Eigen3::Eigen)
+find_package(OpenMP REQUIRED)
+target_link_libraries(ZweiFoil PRIVATE raylib imgui_static rlImGui_static Eigen3::Eigen OpenMP::OpenMP_CXX)
 
 if(MINGW OR WIN32)
     target_link_options(ZweiFoil PRIVATE -static -static-libgcc -static-libstdc++)

@@ -6,6 +6,14 @@
 #include "ZweiFoil/solver.hpp"
 #include "ZweiFoil/lbm_solver.hpp"
 #include "raylib.h"
+#include <vector>
+
+struct ParticleRenderData {
+    Vector2 startPos;
+    Vector2 endPos;
+    float thickness;
+    Color color;
+};
 
 struct WindParticle {
     Vector2 pos;
@@ -45,6 +53,7 @@ private:
 
     Camera2D camera;
     WindSystem wind;
+    std::vector<ParticleRenderData> renderBuffer;
     
     float particleSpawnTimer;
     float displayedVelocity;

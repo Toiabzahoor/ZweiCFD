@@ -3,6 +3,7 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <omp.h>
 
 namespace zweifoil {
 
@@ -35,6 +36,7 @@ void Grid3D::initialize(const Flowconditions& cond) {
     }
     double vz = 0.0;
     
+    #pragma omp parallel for collapse(3)
     for (int z = 0; z < NZ; ++z) {
         for (int y = 0; y < NY; ++y) {
             for (int x = 0; x < NX; ++x) {
@@ -69,6 +71,7 @@ void Grid3D::enforceFreestream(const Flowconditions& cond) {
     double vz = 0.0;
     double usq = vx*vx + vy*vy + vz*vz;
 
+    #pragma omp parallel for collapse(3)
     for (int z = 0; z < NZ; ++z) {
         for (int y = 0; y < NY; ++y) {
             for (int x = 0; x < NX; ++x) {
@@ -88,6 +91,7 @@ void Grid3D::enforceFreestream(const Flowconditions& cond) {
 }
 
 void Grid3D::updateMacroscopic() {
+    #pragma omp parallel for collapse(3)
     for (int z = 0; z < NZ; ++z) {
         for (int y = 0; y < NY; ++y) {
             for (int x = 0; x < NX; ++x) {
@@ -126,6 +130,7 @@ void Grid3D::updateMacroscopic() {
 void Grid3D::collideAndStream(double tau) {
     double omega = 1.0 / tau;
     
+    #pragma omp parallel for collapse(3)
     for (int z = 0; z < NZ; ++z) {
         for (int y = 0; y < NY; ++y) {
             for (int x = 0; x < NX; ++x) {
@@ -163,6 +168,7 @@ void Grid3D::collideAndStream(double tau) {
 }
 
 void Grid3D::applyBoundaries() {
+    #pragma omp parallel for collapse(3)
     for (int z = 0; z < NZ; ++z) {
         for (int y = 0; y < NY; ++y) {
             for (int x = 0; x < NX; ++x) {

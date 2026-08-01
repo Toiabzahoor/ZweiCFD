@@ -2,6 +2,7 @@
 #include "ZweiFoil/solver.hpp" 
 #include <iostream> 
 #include <cmath> 
+#include <omp.h>
 
 namespace zweifoil { 
 
@@ -63,6 +64,7 @@ void InviscidLVPM::calculateInfluenceCoefficients(Eigen::MatrixXd& A, Eigen::Vec
     double V_x, V_y;
     getFreestreamVelocity(conditions.V_inf, conditions.alpha, conditions.windDirection, V_x, V_y);
 
+    #pragma omp parallel for
     for (int i = 0; i < N; ++i) { 
         b(i) = -(V_x * panels[i].normal.x + V_y * panels[i].normal.y); 
 
@@ -133,7 +135,7 @@ Point2D InviscidLVPM::getExactVelocityAt(const Point2D& pos, const Flowcondition
 
     const auto& panels = targetAirfoil.getPanels();
     
-    for (size_t j = 0; j < panels.size(); ++j) {
+    for (int j = 0; j < static_cast<int>(panels.size()); ++j) {
         double xi = pos.x;
         double yi = pos.y;
         double xj = panels[j].p1.x;
@@ -194,6 +196,7 @@ void InviscidLVPM::precomputeVelocityGrid(const Flowconditions& conditions) {
     std::cout << "Precomputing velocity grid (" << cachedGrid.nx << "x" << cachedGrid.ny << ")...\n";
     cachedGrid.grid.resize(cachedGrid.nx * cachedGrid.ny);
     
+    #pragma omp parallel for
     for (int j = 0; j < cachedGrid.ny; ++j) {
         double y = cachedGrid.minY + j * cachedGrid.dy;
         for (int i = 0; i < cachedGrid.nx; ++i) {

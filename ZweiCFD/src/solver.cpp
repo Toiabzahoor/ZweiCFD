@@ -2,6 +2,7 @@
 #include <iostream>
 #include <cmath>
 #include <algorithm>
+#include <omp.h>
 
 namespace zweifoil {
 
@@ -24,7 +25,8 @@ double Solver::calculateViscousDrag(const Flowconditions& conditions) {
     double cd_viscous = 0.0;
     double nu = conditions.kinematic_viscosity;
 
-    for (size_t i = 0; i < panels.size(); ++i) {
+    #pragma omp parallel for reduction(+:cd_viscous)
+    for (int i = 0; i < static_cast<int>(panels.size()); ++i) {
         double U_e = std::abs(gamma(i));
         if (U_e < 1e-6) continue;
         

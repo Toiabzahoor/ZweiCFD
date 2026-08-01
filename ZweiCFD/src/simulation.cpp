@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <algorithm>
+#include <omp.h>
 #include "rlImGui.h"
 #include "imgui.h"
 
@@ -97,6 +98,7 @@ void Simulation::rebuildSolverWithRotation() {
         lbmSolver = std::make_unique<zweifoil::LBMSolver>(64, 32, 32);
         auto& grid = lbmSolver->getGridModifiable();
         const auto& panels = rotatedFoil.getPanels();
+        #pragma omp parallel for collapse(3)
         for (int z = 0; z < grid.NZ; ++z) {
             for (int y = 0; y < grid.NY; ++y) {
                 for (int x = 0; x < grid.NX; ++x) {
@@ -195,6 +197,7 @@ void Simulation::run() {
             }
         }
 
+        #pragma omp parallel for
         for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i) {
             WindParticle& p = wind.particles[i];
             if (!p.active) continue;
@@ -236,6 +239,7 @@ void Simulation::run() {
 
             if (inside) {
                 p.active = false;
+                #pragma omp atomic
                 wind.activeCount--;
                 continue;
             }
@@ -249,6 +253,7 @@ void Simulation::run() {
             if (p.pos.x < killTL.x || p.pos.x > killBR.x ||
                 p.pos.y < killTL.y || p.pos.y > killBR.y) {
                 p.active = false;
+                #pragma omp atomic
                 wind.activeCount--;
                 continue;
             }
@@ -262,48 +267,63 @@ void Simulation::run() {
         BeginBlendMode(BLEND_ALPHA);
         
         Color baseStreamCol = {200, 230, 255, 0}; 
-        for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i) {
-            const WindParticle& p = wind.particles[i];
-            if (!p.active) continue;
+        
+        renderBuffer.clear();
+        #pragma omp parallel
+        {
+            std::vector<ParticleRenderData> localBuffer;
+            #pragma omp for nowait
+            for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i) {
+                const WindParticle& p = wind.particles[i];
+                if (!p.active) continue;
 
-            float fadeIn = std::min(1.0f, p.age / 0.2f);
-            float edgeFade = 1.0f;
-            float dx_kill = std::max({killTL.x - p.pos.x, p.pos.x - killBR.x, 0.0f});
-            float dy_kill = std::max({killTL.y - p.pos.y, p.pos.y - killBR.y, 0.0f});
-            float distFromKill = std::max(dx_kill, dy_kill);
-            
-            if (distFromKill > 20.0f) {
-                edgeFade = std::max(0.0f, 1.0f - (distFromKill - 20.0f) / 80.0f);
+                float fadeIn = std::min(1.0f, p.age / 0.2f);
+                float edgeFade = 1.0f;
+                float dx_kill = std::max({killTL.x - p.pos.x, p.pos.x - killBR.x, 0.0f});
+                float dy_kill = std::max({killTL.y - p.pos.y, p.pos.y - killBR.y, 0.0f});
+                float distFromKill = std::max(dx_kill, dy_kill);
+                
+                if (distFromKill > 20.0f) {
+                    edgeFade = std::max(0.0f, 1.0f - (distFromKill - 20.0f) / 80.0f);
+                }
+                
+                float currentAlpha = p.alpha * fadeIn * edgeFade;
+                if (currentAlpha < 0.005f) continue;
+                
+                float speedRatio = p.velocityMag / std::max(0.01f, (float)flow.V_inf);
+                Color streamCol;
+                if (speedRatio < 0.25f) { 
+                    float t = speedRatio / 0.25f;
+                    streamCol = {(unsigned char)0, (unsigned char)(t*100), (unsigned char)(150 + t*105), 0}; 
+                } else if (speedRatio < 0.5f) { 
+                    float t = (speedRatio - 0.25f) / 0.25f;
+                    streamCol = {(unsigned char)0, (unsigned char)(100 + t*100), (unsigned char)(255 - t*200), 0}; 
+                } else if (speedRatio < 0.75f) { 
+                    float t = (speedRatio - 0.5f) / 0.25f;
+                    streamCol = {(unsigned char)(t*220), (unsigned char)(200 - t*100), (unsigned char)(55 - t*55), 0}; 
+                } else { 
+                    float t = std::min(1.0f, (speedRatio - 0.75f) / 0.25f);
+                    streamCol = {(unsigned char)220, (unsigned char)(100 - t*100), 0, 0}; 
+                }
+                streamCol.a = static_cast<unsigned char>(currentAlpha * 255.0f);
+                
+                Vector2 trailDir = {p.pos.x - p.prevPos.x, p.pos.y - p.prevPos.y};
+                float stretchFactor = 4.0f; 
+                Vector2 trailEnd = {
+                    p.pos.x - trailDir.x * stretchFactor,
+                    p.pos.y - trailDir.y * stretchFactor
+                };
+                
+                localBuffer.push_back({p.pos, trailEnd, p.baseSize, streamCol});
             }
-            
-            float currentAlpha = p.alpha * fadeIn * edgeFade;
-            if (currentAlpha < 0.005f) continue;
-            
-            float speedRatio = p.velocityMag / std::max(0.01f, (float)flow.V_inf);
-            Color streamCol;
-            if (speedRatio < 0.25f) { 
-                float t = speedRatio / 0.25f;
-                streamCol = {(unsigned char)0, (unsigned char)(t*100), (unsigned char)(150 + t*105), 0}; 
-            } else if (speedRatio < 0.5f) { 
-                float t = (speedRatio - 0.25f) / 0.25f;
-                streamCol = {(unsigned char)0, (unsigned char)(100 + t*100), (unsigned char)(255 - t*200), 0}; 
-            } else if (speedRatio < 0.75f) { 
-                float t = (speedRatio - 0.5f) / 0.25f;
-                streamCol = {(unsigned char)(t*220), (unsigned char)(200 - t*100), (unsigned char)(55 - t*55), 0}; 
-            } else { 
-                float t = std::min(1.0f, (speedRatio - 0.75f) / 0.25f);
-                streamCol = {(unsigned char)220, (unsigned char)(100 - t*100), 0, 0}; 
+            #pragma omp critical
+            {
+                renderBuffer.insert(renderBuffer.end(), localBuffer.begin(), localBuffer.end());
             }
-            streamCol.a = static_cast<unsigned char>(currentAlpha * 255.0f);
-            
-            Vector2 trailDir = {p.pos.x - p.prevPos.x, p.pos.y - p.prevPos.y};
-            float stretchFactor = 4.0f; 
-            Vector2 trailEnd = {
-                p.pos.x - trailDir.x * stretchFactor,
-                p.pos.y - trailDir.y * stretchFactor
-            };
-            
-            DrawLineEx(p.pos, trailEnd, p.baseSize, streamCol);
+        }
+        
+        for (const auto& rd : renderBuffer) {
+            DrawLineEx(rd.startPos, rd.endPos, rd.thickness, rd.color);
         }
         
         EndBlendMode();
