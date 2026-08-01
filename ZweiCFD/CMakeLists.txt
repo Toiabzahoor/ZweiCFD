@@ -70,6 +70,7 @@ add_executable(ZweiFoil
     src/solver.cpp
     src/simulation.cpp
     src/inviscid_lvpm.cpp
+    src/lbm_solver.cpp
 )
 target_include_directories(ZweiFoil PRIVATE
     ${raylib_SOURCE_DIR}/src

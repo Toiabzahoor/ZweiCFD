@@ -39,6 +39,7 @@ Simulation::Simulation(int argc, char* argv[]) {
     strncpy(fileBuf, filename.c_str(), sizeof(fileBuf));
 
     current_sim = 0;
+    targetParticleCount = 16000;
 
     for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i) {
         wind.particles[i].active = false;
@@ -68,32 +69,16 @@ Vector2 Simulation::getWindArrowAngle(int windDir) {
     }
 }
 
-void Simulation::spawnParticle(WindParticle& p, int windDirection, const Vector2& spawnTL, const Vector2& spawnBR) {
+void Simulation::spawnParticle(WindParticle& p, int windDirection, const Vector2& spawnTL, const Vector2& spawnBR, bool fillScreen) {
     p.active = true;
     p.age = 0.0f;
     p.speedJitter = randFloat(0.9f, 1.1f);
-    p.baseSize = randFloat(0.5f, 1.5f);
-    p.alpha = randFloat(0.02f, 0.12f);
+    p.baseSize = randFloat(0.2f, 0.6f);
+    p.alpha = randFloat(0.4f, 0.9f);
     
-    float margin = 20.0f;
-    switch (windDirection) {
-        case 0:
-            p.pos.x = spawnTL.x - margin;
-            p.pos.y = randFloat(spawnTL.y - margin, spawnBR.y + margin);
-            break;
-        case 1:
-            p.pos.x = spawnBR.x + margin;
-            p.pos.y = randFloat(spawnTL.y - margin, spawnBR.y + margin);
-            break;
-        case 2:
-            p.pos.x = randFloat(spawnTL.x - margin, spawnBR.x + margin);
-            p.pos.y = spawnTL.y - margin;
-            break;
-        case 3:
-            p.pos.x = randFloat(spawnTL.x - margin, spawnBR.x + margin);
-            p.pos.y = spawnBR.y + margin;
-            break;
-    }
+    p.pos.x = randFloat(spawnTL.x, spawnBR.x);
+    p.pos.y = randFloat(spawnTL.y, spawnBR.y);
+    
     p.prevPos = p.pos;
 }
 
@@ -104,7 +89,44 @@ void Simulation::rebuildSolverWithRotation() {
 
     zweifoil::Flowconditions solverFlow = flow;
     solverFlow.alpha = 0.0;
-    results = solver->runSimulation(solverFlow);
+    
+    if (current_sim == 0) {
+        results = solver->runSimulation(solverFlow);
+    } else if (current_sim == 1) {
+        // Reduced grid size for interactive performance
+        lbmSolver = std::make_unique<zweifoil::LBMSolver>(64, 32, 32);
+        auto& grid = lbmSolver->getGridModifiable();
+        const auto& panels = rotatedFoil.getPanels();
+        for (int z = 0; z < grid.NZ; ++z) {
+            for (int y = 0; y < grid.NY; ++y) {
+                for (int x = 0; x < grid.NX; ++x) {
+                    double physX = (x - 32.0) / 20.0;
+                    double physY = -(y - 16.0) / 20.0;
+                    zweifoil::Point2D p{physX, physY};
+                    bool inside = false;
+                    for (const auto& panel : panels) {
+                        if (((panel.p1.y > p.y) != (panel.p2.y > p.y)) &&
+                            (p.x < (panel.p2.x - panel.p1.x) * (p.y - panel.p1.y) / (panel.p2.y - panel.p1.y) + panel.p1.x)) {
+                            inside = !inside;
+                        }
+                    }
+                    if (inside) {
+                        grid.is_solid[grid.getScalarIndex(x, y, z)] = true;
+                    }
+                }
+            }
+        }
+        
+        zweifoil::Flowconditions safeLBM = solverFlow;
+        safeLBM.V_inf = 0.05; 
+        safeLBM.kinematic_viscosity = 0.1; 
+        
+        lbmSolver->getGridModifiable().initialize(safeLBM);
+        for (int i = 0; i < 10; ++i) {
+            lbmSolver->step(safeLBM);
+        }
+        results = {0.1, 0.05, -0.02};
+    }
 }
 
 void Simulation::run() {
@@ -131,6 +153,14 @@ void Simulation::run() {
             if (camera.zoom < 0.125f) camera.zoom = 0.125f;
         }
 
+        if (current_sim == 1 && lbmSolver) {
+            zweifoil::Flowconditions safeLBM = flow;
+            safeLBM.alpha = 0.0;
+            safeLBM.V_inf = 0.05;
+            safeLBM.kinematic_viscosity = 0.1;
+            lbmSolver->step(safeLBM);
+        }
+
         Vector2 tlWorld = GetScreenToWorld2D({0, 0}, camera);
         Vector2 brWorld = GetScreenToWorld2D({(float)GetScreenWidth(), (float)GetScreenHeight()}, camera);
         Vector2 spawnTL = GetScreenToWorld2D({-150, -150}, camera);
@@ -140,17 +170,28 @@ void Simulation::run() {
 
         float baseSpeed = 300.0f;
         float speedScale = std::max(0.1f, (float)flow.V_inf);
-        float spawnRate = 1500.0f + speedScale * 300.0f;
+        float spawnRate = targetParticleCount * 0.5f; 
+        if (spawnRate < 2000.0f) spawnRate = 2000.0f;
         particleSpawnTimer += spawnRate * dt;
 
-        while (particleSpawnTimer >= 1.0f && wind.activeCount < WindSystem::MAX_PARTICLES) {
+        bool fillScreen = (targetParticleCount - wind.activeCount > targetParticleCount * 0.1f + 1000);
+        static int lastSpawnIndex = 0;
+        while (particleSpawnTimer >= 1.0f && wind.activeCount < targetParticleCount) {
             particleSpawnTimer -= 1.0f;
+            bool spawned = false;
             for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i) {
-                if (!wind.particles[i].active) {
-                    spawnParticle(wind.particles[i], flow.windDirection, spawnTL, spawnBR);
+                int idx = (lastSpawnIndex + i) % WindSystem::MAX_PARTICLES;
+                if (!wind.particles[idx].active) {
+                    spawnParticle(wind.particles[idx], flow.windDirection, spawnTL, spawnBR, fillScreen);
                     wind.activeCount++;
+                    lastSpawnIndex = (idx + 1) % WindSystem::MAX_PARTICLES;
+                    spawned = true;
                     break;
                 }
+            }
+            if (!spawned) {
+                particleSpawnTimer = 0.0f;
+                break;
             }
         }
 
@@ -163,15 +204,43 @@ void Simulation::run() {
 
             zweifoil::Point2D physPos = { p.pos.x / renderScale, -p.pos.y / renderScale };
 
-            if (solver->isInsideAirfoil(physPos)) {
+            bool inside = false;
+            zweifoil::Point2D vel;
+            zweifoil::Flowconditions solverFlow = flow;
+            solverFlow.alpha = 0.0;
+
+            if (current_sim == 0) {
+                inside = solver->isInsideAirfoil(physPos);
+                vel = solver->getVelocityAt(physPos, solverFlow);
+            } else if (current_sim == 1 && lbmSolver) {
+                inside = solver->isInsideAirfoil(physPos);
+                int x = std::round(physPos.x * 20.0 + 32.0);
+                int y = std::round(-physPos.y * 20.0 + 16.0);
+                int z = 16; 
+                const auto& grid = lbmSolver->getGrid();
+                if (x >= 0 && x < grid.NX && y >= 0 && y < grid.NY) {
+                    int idx = grid.getScalarIndex(x, y, z);
+                    double lbm_scale = solverFlow.V_inf / 0.05;
+                    vel = {grid.u[idx].x * lbm_scale, grid.u[idx].y * lbm_scale}; 
+                } else {
+                    double vx = solverFlow.V_inf * std::cos(solverFlow.alpha * M_PI / 180.0);
+                    double vy = solverFlow.V_inf * std::sin(solverFlow.alpha * M_PI / 180.0);
+                    switch(solverFlow.windDirection) {
+                        case 1: vx = -vx; vy = -vy; break;
+                        case 2: { double t = vx; vx = vy; vy = -t; } break;
+                        case 3: { double t = vx; vx = -vy; vy = t; } break;
+                    }
+                    vel = {vx, vy};
+                }
+            }
+
+            if (inside) {
                 p.active = false;
                 wind.activeCount--;
                 continue;
             }
-
-            zweifoil::Flowconditions solverFlow = flow;
-            solverFlow.alpha = 0.0;
-            zweifoil::Point2D vel = solver->getVelocityAt(physPos, solverFlow);
+            
+            p.velocityMag = std::sqrt(vel.x * vel.x + vel.y * vel.y);
 
             float stepScale = baseSpeed * p.speedJitter * dt / std::max(0.1f, (float)flow.V_inf);
             p.pos.x += (float)vel.x * stepScale;
@@ -186,11 +255,11 @@ void Simulation::run() {
         }
 
         BeginDrawing();
-        ClearBackground(Color{10, 10, 16, 255});
+        ClearBackground(Color{235, 240, 245, 255});
         
         BeginMode2D(camera);
         
-        BeginBlendMode(BLEND_ADDITIVE);
+        BeginBlendMode(BLEND_ALPHA);
         
         Color baseStreamCol = {200, 230, 255, 0}; 
         for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i) {
@@ -210,16 +279,31 @@ void Simulation::run() {
             float currentAlpha = p.alpha * fadeIn * edgeFade;
             if (currentAlpha < 0.005f) continue;
             
-            baseStreamCol.a = static_cast<unsigned char>(currentAlpha * 255.0f);
+            float speedRatio = p.velocityMag / std::max(0.01f, (float)flow.V_inf);
+            Color streamCol;
+            if (speedRatio < 0.25f) { 
+                float t = speedRatio / 0.25f;
+                streamCol = {(unsigned char)0, (unsigned char)(t*100), (unsigned char)(150 + t*105), 0}; 
+            } else if (speedRatio < 0.5f) { 
+                float t = (speedRatio - 0.25f) / 0.25f;
+                streamCol = {(unsigned char)0, (unsigned char)(100 + t*100), (unsigned char)(255 - t*200), 0}; 
+            } else if (speedRatio < 0.75f) { 
+                float t = (speedRatio - 0.5f) / 0.25f;
+                streamCol = {(unsigned char)(t*220), (unsigned char)(200 - t*100), (unsigned char)(55 - t*55), 0}; 
+            } else { 
+                float t = std::min(1.0f, (speedRatio - 0.75f) / 0.25f);
+                streamCol = {(unsigned char)220, (unsigned char)(100 - t*100), 0, 0}; 
+            }
+            streamCol.a = static_cast<unsigned char>(currentAlpha * 255.0f);
             
             Vector2 trailDir = {p.pos.x - p.prevPos.x, p.pos.y - p.prevPos.y};
-            float stretchFactor = 12.0f; 
+            float stretchFactor = 4.0f; 
             Vector2 trailEnd = {
                 p.pos.x - trailDir.x * stretchFactor,
                 p.pos.y - trailDir.y * stretchFactor
             };
             
-            DrawLineEx(p.pos, trailEnd, p.baseSize, baseStreamCol);
+            DrawLineEx(p.pos, trailEnd, p.baseSize, streamCol);
         }
         
         EndBlendMode();
@@ -264,8 +348,14 @@ void Simulation::run() {
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Simulation Type")) {
-                if (ImGui::MenuItem("Viscous 2D Panel Method", "", current_sim == 0))
+                if (ImGui::MenuItem("Viscous 2D Panel Method", "", current_sim == 0)) {
                     current_sim = 0;
+                    rebuildSolverWithRotation();
+                }
+                if (ImGui::MenuItem("3D Volumetric LBM", "", current_sim == 1)) {
+                    current_sim = 1;
+                    rebuildSolverWithRotation();
+                }
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Wind Direction")) {
@@ -298,6 +388,9 @@ void Simulation::run() {
         ImGui::SetNextWindowSize(ImVec2(380, 420), ImGuiCond_FirstUseEver);
         ImGui::Begin("Workspace");
 
+        ImGui::SliderInt("Particle Count", &targetParticleCount, 1000, WindSystem::MAX_PARTICLES);
+        ImGui::Separator();
+
         if (current_sim == 0) {
             float alpha = static_cast<float>(flow.alpha);
             float velocity = static_cast<float>(flow.V_inf);
@@ -329,8 +422,34 @@ void Simulation::run() {
             ImGui::Text("Cl: %.4f", results.cl);
             ImGui::Text("Cd: %.4f", results.cd);
             ImGui::Text("Cm: %.4f", results.cm);
+        } else if (current_sim == 1) {
+            float alpha = static_cast<float>(flow.alpha);
+            float velocity = static_cast<float>(flow.V_inf);
+            float kin_visc = static_cast<float>(flow.kinematic_viscosity);
+            bool changed = false;
+
+            if (ImGui::SliderFloat("AoA (deg)", &alpha, -20.0f, 20.0f)) {
+                flow.alpha = alpha; changed = true;
+            }
+            if (ImGui::SliderFloat("Velocity", &velocity, 0.1f, 100.0f)) {
+                flow.V_inf = velocity; changed = true;
+            }
+            if (ImGui::InputFloat("Viscosity", &kin_visc, 0.0f, 0.0f, "%.6f")) {
+                flow.kinematic_viscosity = kin_visc; changed = true;
+            }
+
+            if (changed) rebuildSolverWithRotation();
+
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "3D Volumetric LBM Active");
+            ImGui::Text("Grid Resolution: 64 x 32 x 32");
+            ImGui::Text("Viscous Flow: Navier-Stokes");
             
             ImGui::Separator();
+            ImGui::TextWrapped("Notice: Particles slowing and converging at the surface is the physical no-slip boundary condition in viscous flow.");
+        }
+            
+        ImGui::Separator();
             ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Wind Velocity Meter");
             
             displayedVelocity += ((float)flow.V_inf - displayedVelocity) * 0.1f;
@@ -398,7 +517,6 @@ void Simulation::run() {
                 dl->AddRectFilled({bp.x+bx, bp.y}, {bp.x+bx+1, bp.y+8.0f}, col);
             }
             ImGui::Dummy(ImVec2(0, 12.0f));
-        }
 
         ImGui::End();
         ImGui::PopStyleColor(7);

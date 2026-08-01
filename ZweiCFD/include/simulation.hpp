@@ -4,6 +4,7 @@
 #include <memory>
 #include "ZweiFoil/airfoil.hpp"
 #include "ZweiFoil/solver.hpp"
+#include "ZweiFoil/lbm_solver.hpp"
 #include "raylib.h"
 
 struct WindParticle {
@@ -12,12 +13,13 @@ struct WindParticle {
     float baseSize;
     float alpha;
     float speedJitter;
+    float velocityMag;
     bool active;
     float age;
 };
 
 struct WindSystem {
-    static constexpr int MAX_PARTICLES = 16000;
+    static constexpr int MAX_PARTICLES = 1000000;
     WindParticle particles[MAX_PARTICLES];
     int activeCount = 0;
 };
@@ -31,13 +33,14 @@ public:
 private:
     float randFloat(float min, float max);
     Vector2 getWindArrowAngle(int windDir);
-    void spawnParticle(WindParticle& p, int windDirection, const Vector2& spawnTL, const Vector2& spawnBR);
+    void spawnParticle(WindParticle& p, int windDirection, const Vector2& spawnTL, const Vector2& spawnBR, bool fillScreen = false);
     void rebuildSolverWithRotation();
 
     zweifoil::Airfoil foil;
     zweifoil::Airfoil rotatedFoil;
     zweifoil::Flowconditions flow;
     std::unique_ptr<zweifoil::Solver> solver;
+    std::unique_ptr<zweifoil::LBMSolver> lbmSolver;
     zweifoil::Coefficients results;
 
     Camera2D camera;
@@ -47,5 +50,6 @@ private:
     float displayedVelocity;
     Vector2 windArrowDir;
     int current_sim;
+    int targetParticleCount;
     char fileBuf[256];
 };
