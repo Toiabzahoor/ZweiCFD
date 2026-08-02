@@ -29,6 +29,8 @@ public:
     Point2D getVelocityAt(const Point2D& pos, const Flowconditions& conditions) const;
     bool isInsideAirfoil(const Point2D& pos) const;
 
+    InviscidLVPM* getInviscidEngine() const { return inviscidEngine.get(); }
+
 private:
     Airfoil targetAirfoil;
     std::unique_ptr<InviscidLVPM> inviscidEngine;

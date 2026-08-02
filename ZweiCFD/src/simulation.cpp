@@ -1,12 +1,21 @@
-// src/simulation.cpp
 #include "simulation.hpp"
 #include <iostream>
 #include <cstdlib>
 #include <cmath>
 #include <algorithm>
 #include <omp.h>
+
+extern "C" {
+    extern void (*glad_glMemoryBarrier)(unsigned int barriers);
+}
+#define GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT 0x00000001
+#define GL_SHADER_STORAGE_BARRIER_BIT 0x00002000
+
 #include "rlImGui.h"
 #include "imgui.h"
+#include "shaders.hpp"
+#include "rlgl.h"
+#include "raymath.h"
 
 Simulation::Simulation(int argc, char* argv[]) {
     std::cout << "==== ZweiCFD v0.4   Streamlines & Viscous Flow ====\n";
@@ -23,11 +32,12 @@ Simulation::Simulation(int argc, char* argv[]) {
     flow.kinematic_viscosity = 1.5e-5;
     flow.windDirection = 0;
 
-    rebuildSolverWithRotation();
-
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
     InitWindow(1280, 720, "ZweiCFD Engine");
     SetTargetFPS(60);
+    
+    // IMPORTANT: OpenGL Context is now ready, we can safely initialize shaders and buffers!
+    rebuildSolverWithRotation();
     
     rlImGuiSetup(true);
 
@@ -43,15 +53,32 @@ Simulation::Simulation(int argc, char* argv[]) {
     targetParticleCount = 16000;
 
     for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i) {
-        wind.particles[i].active = false;
+        wind.particles[i].isActive = 0;
     }
     
     particleSpawnTimer = 0.0f;
     displayedVelocity = (float)flow.V_inf;
     windArrowDir = getWindArrowAngle(flow.windDirection);
+
+    // Initialize Shaders
+    unsigned int csId = rlLoadShader(particle_update_comp, RL_COMPUTE_SHADER);
+    particleComputeShader = rlLoadShaderProgramCompute(csId);
+
+    particleRenderShader = rlLoadShaderProgram(particle_render_vs, particle_render_fs);
+
+    quadMesh = GenMeshPlane(1.0f, 1.0f, 1, 1); // Generate a plane quad
+    UploadMesh(&quadMesh, false); // Actually upload it to the GPU!
+    particleMaterial = LoadMaterialDefault();
+    particleMaterial.shader.id = particleRenderShader;
+
+    ssbo_particles = rlLoadShaderBuffer(WindSystem::MAX_PARTICLES * sizeof(WindParticle), wind.particles, RL_DYNAMIC_DRAW);
 }
 
 Simulation::~Simulation() {
+    rlUnloadShaderBuffer(ssbo_particles);
+    rlUnloadShaderProgram(particleComputeShader);
+    UnloadMaterial(particleMaterial);
+    UnloadMesh(quadMesh);
     rlImGuiShutdown();
     CloseWindow();
 }
@@ -71,7 +98,7 @@ Vector2 Simulation::getWindArrowAngle(int windDir) {
 }
 
 void Simulation::spawnParticle(WindParticle& p, int windDirection, const Vector2& spawnTL, const Vector2& spawnBR, bool fillScreen) {
-    p.active = true;
+    p.isActive = 1;
     p.age = 0.0f;
     p.speedJitter = randFloat(0.9f, 1.1f);
     p.baseSize = randFloat(0.2f, 0.6f);
@@ -93,6 +120,20 @@ void Simulation::rebuildSolverWithRotation() {
     
     if (current_sim == 0) {
         results = solver->runSimulation(solverFlow);
+        
+        if (solver->getInviscidEngine()) {
+            auto& cachedGrid = solver->getInviscidEngine()->cachedGrid;
+            std::vector<Vector2> floatGrid(cachedGrid.grid.size());
+            for (size_t i = 0; i < cachedGrid.grid.size(); ++i) {
+                floatGrid[i].x = (float)cachedGrid.grid[i].x;
+                floatGrid[i].y = (float)cachedGrid.grid[i].y;
+            }
+            if (solver->getInviscidEngine()->ssbo_u == 0) {
+                solver->getInviscidEngine()->ssbo_u = rlLoadShaderBuffer(floatGrid.size() * sizeof(Vector2), floatGrid.data(), RL_DYNAMIC_DRAW);
+            } else {
+                rlUpdateShaderBuffer(solver->getInviscidEngine()->ssbo_u, floatGrid.data(), floatGrid.size() * sizeof(Vector2), 0);
+            }
+        }
     } else if (current_sim == 1) {
         // Reduced grid size for interactive performance
         lbmSolver = std::make_unique<zweifoil::LBMSolver>(64, 32, 32);
@@ -165,10 +206,10 @@ void Simulation::run() {
 
         Vector2 tlWorld = GetScreenToWorld2D({0, 0}, camera);
         Vector2 brWorld = GetScreenToWorld2D({(float)GetScreenWidth(), (float)GetScreenHeight()}, camera);
-        Vector2 spawnTL = GetScreenToWorld2D({-150, -150}, camera);
-        Vector2 spawnBR = GetScreenToWorld2D({(float)GetScreenWidth() + 150, (float)GetScreenHeight() + 150}, camera);
-        Vector2 killTL = GetScreenToWorld2D({-400, -400}, camera);
-        Vector2 killBR = GetScreenToWorld2D({(float)GetScreenWidth() + 400, (float)GetScreenHeight() + 400}, camera);
+        Vector2 spawnTL = GetScreenToWorld2D({-1000, -1000}, camera);
+        Vector2 spawnBR = GetScreenToWorld2D({(float)GetScreenWidth() + 1000, (float)GetScreenHeight() + 1000}, camera);
+        Vector2 killTL = GetScreenToWorld2D({-2000, -2000}, camera);
+        Vector2 killBR = GetScreenToWorld2D({(float)GetScreenWidth() + 2000, (float)GetScreenHeight() + 2000}, camera);
 
         float baseSpeed = 300.0f;
         float speedScale = std::max(0.1f, (float)flow.V_inf);
@@ -176,87 +217,95 @@ void Simulation::run() {
         if (spawnRate < 2000.0f) spawnRate = 2000.0f;
         particleSpawnTimer += spawnRate * dt;
 
-        bool fillScreen = (targetParticleCount - wind.activeCount > targetParticleCount * 0.1f + 1000);
-        static int lastSpawnIndex = 0;
-        while (particleSpawnTimer >= 1.0f && wind.activeCount < targetParticleCount) {
-            particleSpawnTimer -= 1.0f;
-            bool spawned = false;
-            for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i) {
-                int idx = (lastSpawnIndex + i) % WindSystem::MAX_PARTICLES;
-                if (!wind.particles[idx].active) {
-                    spawnParticle(wind.particles[idx], flow.windDirection, spawnTL, spawnBR, fillScreen);
-                    wind.activeCount++;
-                    lastSpawnIndex = (idx + 1) % WindSystem::MAX_PARTICLES;
-                    spawned = true;
-                    break;
-                }
+        // Fast Ring-Buffer Spawning (No GPU->CPU Sync Required!)
+        static int nextSpawnIndex = 0;
+        static bool firstRun = true;
+        
+        if (firstRun) {
+            // Initial burst to fill the screen
+            for (int i = 0; i < targetParticleCount; ++i) {
+                spawnParticle(wind.particles[i], flow.windDirection, spawnTL, spawnBR, true);
             }
-            if (!spawned) {
-                particleSpawnTimer = 0.0f;
-                break;
+            rlUpdateShaderBuffer(ssbo_particles, wind.particles, targetParticleCount * sizeof(WindParticle), 0);
+            firstRun = false;
+        } else {
+            // Continuous flow
+            int spawnCount = (int)particleSpawnTimer;
+            if (spawnCount > targetParticleCount) spawnCount = targetParticleCount;
+            particleSpawnTimer -= spawnCount;
+            
+            for (int i = 0; i < spawnCount; ++i) {
+                int idx = nextSpawnIndex;
+                spawnParticle(wind.particles[idx], flow.windDirection, spawnTL, spawnBR, false);
+                rlUpdateShaderBuffer(ssbo_particles, &wind.particles[idx], sizeof(WindParticle), idx * sizeof(WindParticle));
+                nextSpawnIndex = (nextSpawnIndex + 1) % targetParticleCount;
             }
         }
 
-        #pragma omp parallel for
-        for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i) {
-            WindParticle& p = wind.particles[i];
-            if (!p.active) continue;
+        // --- DISPATCH COMPUTE SHADER FOR PARTICLES ---
+        rlEnableShader(particleComputeShader);
+        
+        int maxPLoc = rlGetLocationUniform(particleComputeShader, "maxParticles");
+        int dtLoc = rlGetLocationUniform(particleComputeShader, "dt");
+        int rsLoc = rlGetLocationUniform(particleComputeShader, "renderScale");
+        int simLoc = rlGetLocationUniform(particleComputeShader, "current_sim");
+        int vinfLoc = rlGetLocationUniform(particleComputeShader, "v_inf");
+        int alphaLoc = rlGetLocationUniform(particleComputeShader, "alpha_angle");
+        int windDirLoc = rlGetLocationUniform(particleComputeShader, "windDirection");
+        int gnxLoc = rlGetLocationUniform(particleComputeShader, "gridNX");
+        int gnyLoc = rlGetLocationUniform(particleComputeShader, "gridNY");
+        int stlLoc = rlGetLocationUniform(particleComputeShader, "spawnTL");
+        int sbrLoc = rlGetLocationUniform(particleComputeShader, "spawnBR");
+        int ktlLoc = rlGetLocationUniform(particleComputeShader, "killTL");
+        int kbrLoc = rlGetLocationUniform(particleComputeShader, "killBR");
+        
+        float fVinf = (float)flow.V_inf;
+        float fAlpha = (float)flow.alpha;
+        int gridNX = lbmSolver ? lbmSolver->getGrid().NX : 0;
+        int gridNY = lbmSolver ? lbmSolver->getGrid().NY : 0;
 
-            p.prevPos = p.pos;
-            p.age += dt;
+        rlSetUniform(maxPLoc, &targetParticleCount, RL_SHADER_UNIFORM_INT, 1);
+        rlSetUniform(dtLoc, &dt, RL_SHADER_UNIFORM_FLOAT, 1);
+        rlSetUniform(rsLoc, &renderScale, RL_SHADER_UNIFORM_FLOAT, 1);
+        rlSetUniform(simLoc, &current_sim, RL_SHADER_UNIFORM_INT, 1);
+        rlSetUniform(vinfLoc, &fVinf, RL_SHADER_UNIFORM_FLOAT, 1);
+        rlSetUniform(alphaLoc, &fAlpha, RL_SHADER_UNIFORM_FLOAT, 1);
+        rlSetUniform(windDirLoc, &flow.windDirection, RL_SHADER_UNIFORM_INT, 1);
+        rlSetUniform(gnxLoc, &gridNX, RL_SHADER_UNIFORM_INT, 1);
+        rlSetUniform(gnyLoc, &gridNY, RL_SHADER_UNIFORM_INT, 1);
+        
+        int swLoc = rlGetLocationUniform(particleComputeShader, "screenWidth");
+        int shLoc = rlGetLocationUniform(particleComputeShader, "screenHeight");
+        float fsw = (float)GetScreenWidth();
+        float fsh = (float)GetScreenHeight();
+        rlSetUniform(swLoc, &fsw, RL_SHADER_UNIFORM_FLOAT, 1);
+        rlSetUniform(shLoc, &fsh, RL_SHADER_UNIFORM_FLOAT, 1);
+        
+        float fSpawnTL[2] = {spawnTL.x, spawnTL.y};
+        float fSpawnBR[2] = {spawnBR.x, spawnBR.y};
+        float fKillTL[2] = {killTL.x, killTL.y};
+        float fKillBR[2] = {killBR.x, killBR.y};
+        rlSetUniform(stlLoc, fSpawnTL, RL_SHADER_UNIFORM_VEC2, 1);
+        rlSetUniform(sbrLoc, fSpawnBR, RL_SHADER_UNIFORM_VEC2, 1);
+        rlSetUniform(ktlLoc, fKillTL, RL_SHADER_UNIFORM_VEC2, 1);
+        rlSetUniform(kbrLoc, fKillBR, RL_SHADER_UNIFORM_VEC2, 1);
 
-            zweifoil::Point2D physPos = { p.pos.x / renderScale, -p.pos.y / renderScale };
-
-            bool inside = false;
-            zweifoil::Point2D vel;
-            zweifoil::Flowconditions solverFlow = flow;
-            solverFlow.alpha = 0.0;
-
-            if (current_sim == 0) {
-                inside = solver->isInsideAirfoil(physPos);
-                vel = solver->getVelocityAt(physPos, solverFlow);
-            } else if (current_sim == 1 && lbmSolver) {
-                inside = solver->isInsideAirfoil(physPos);
-                int x = std::round(physPos.x * 20.0 + 32.0);
-                int y = std::round(-physPos.y * 20.0 + 16.0);
-                int z = 16; 
-                const auto& grid = lbmSolver->getGrid();
-                if (x >= 0 && x < grid.NX && y >= 0 && y < grid.NY) {
-                    int idx = grid.getScalarIndex(x, y, z);
-                    double lbm_scale = solverFlow.V_inf / 0.05;
-                    vel = {grid.u[idx].x * lbm_scale, grid.u[idx].y * lbm_scale}; 
-                } else {
-                    double vx = solverFlow.V_inf * std::cos(solverFlow.alpha * M_PI / 180.0);
-                    double vy = solverFlow.V_inf * std::sin(solverFlow.alpha * M_PI / 180.0);
-                    switch(solverFlow.windDirection) {
-                        case 1: vx = -vx; vy = -vy; break;
-                        case 2: { double t = vx; vx = vy; vy = -t; } break;
-                        case 3: { double t = vx; vx = -vy; vy = t; } break;
-                    }
-                    vel = {vx, vy};
-                }
-            }
-
-            if (inside) {
-                p.active = false;
-                #pragma omp atomic
-                wind.activeCount--;
-                continue;
-            }
-            
-            p.velocityMag = std::sqrt(vel.x * vel.x + vel.y * vel.y);
-
-            float stepScale = baseSpeed * p.speedJitter * dt / std::max(0.1f, (float)flow.V_inf);
-            p.pos.x += (float)vel.x * stepScale;
-            p.pos.y -= (float)vel.y * stepScale;
-
-            if (p.pos.x < killTL.x || p.pos.x > killBR.x ||
-                p.pos.y < killTL.y || p.pos.y > killBR.y) {
-                p.active = false;
-                #pragma omp atomic
-                wind.activeCount--;
-                continue;
-            }
+        rlBindShaderBuffer(ssbo_particles, 5);
+        
+        if (current_sim == 1 && lbmSolver) {
+            rlBindShaderBuffer(lbmSolver->getGrid().ssbo_u, 4);
+            rlBindShaderBuffer(lbmSolver->getGrid().ssbo_is_solid, 2);
+        } else if (current_sim == 0 && solver && solver->getInviscidEngine() && solver->getInviscidEngine()->ssbo_u != 0) {
+            rlBindShaderBuffer(solver->getInviscidEngine()->ssbo_u, 6);
+        }
+        
+        int groupsX = (targetParticleCount + 255) / 256;
+        rlComputeShaderDispatch(groupsX, 1, 1);
+        rlDisableShader();
+        
+        // Ensure GPU finishes writing to the SSBO before the vertex shader attempts to read it
+        if (glad_glMemoryBarrier) {
+            glad_glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
         }
 
         BeginDrawing();
@@ -266,67 +315,69 @@ void Simulation::run() {
         
         BeginBlendMode(BLEND_ALPHA);
         
-        Color baseStreamCol = {200, 230, 255, 0}; 
+        // --- RENDER PARTICLES VIA INSTANCING ---
+        rlEnableShader(particleRenderShader);
         
-        renderBuffer.clear();
-        #pragma omp parallel
-        {
-            std::vector<ParticleRenderData> localBuffer;
-            #pragma omp for nowait
-            for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i) {
-                const WindParticle& p = wind.particles[i];
-                if (!p.active) continue;
-
-                float fadeIn = std::min(1.0f, p.age / 0.2f);
-                float edgeFade = 1.0f;
-                float dx_kill = std::max({killTL.x - p.pos.x, p.pos.x - killBR.x, 0.0f});
-                float dy_kill = std::max({killTL.y - p.pos.y, p.pos.y - killBR.y, 0.0f});
-                float distFromKill = std::max(dx_kill, dy_kill);
-                
-                if (distFromKill > 20.0f) {
-                    edgeFade = std::max(0.0f, 1.0f - (distFromKill - 20.0f) / 80.0f);
-                }
-                
-                float currentAlpha = p.alpha * fadeIn * edgeFade;
-                if (currentAlpha < 0.005f) continue;
-                
-                float speedRatio = p.velocityMag / std::max(0.01f, (float)flow.V_inf);
-                Color streamCol;
-                if (speedRatio < 0.25f) { 
-                    float t = speedRatio / 0.25f;
-                    streamCol = {(unsigned char)0, (unsigned char)(t*100), (unsigned char)(150 + t*105), 0}; 
-                } else if (speedRatio < 0.5f) { 
-                    float t = (speedRatio - 0.25f) / 0.25f;
-                    streamCol = {(unsigned char)0, (unsigned char)(100 + t*100), (unsigned char)(255 - t*200), 0}; 
-                } else if (speedRatio < 0.75f) { 
-                    float t = (speedRatio - 0.5f) / 0.25f;
-                    streamCol = {(unsigned char)(t*220), (unsigned char)(200 - t*100), (unsigned char)(55 - t*55), 0}; 
-                } else { 
-                    float t = std::min(1.0f, (speedRatio - 0.75f) / 0.25f);
-                    streamCol = {(unsigned char)220, (unsigned char)(100 - t*100), 0, 0}; 
-                }
-                streamCol.a = static_cast<unsigned char>(currentAlpha * 255.0f);
-                
-                Vector2 trailDir = {p.pos.x - p.prevPos.x, p.pos.y - p.prevPos.y};
-                float stretchFactor = 4.0f; 
-                Vector2 trailEnd = {
-                    p.pos.x - trailDir.x * stretchFactor,
-                    p.pos.y - trailDir.y * stretchFactor
-                };
-                
-                localBuffer.push_back({p.pos, trailEnd, p.baseSize, streamCol});
-            }
-            #pragma omp critical
-            {
-                renderBuffer.insert(renderBuffer.end(), localBuffer.begin(), localBuffer.end());
-            }
-        }
+        int vpLoc = rlGetLocationUniform(particleRenderShader, "mvp");
+        Matrix matMVP = MatrixMultiply(rlGetMatrixModelview(), rlGetMatrixProjection());
+        rlSetUniformMatrix(vpLoc, matMVP);
         
-        for (const auto& rd : renderBuffer) {
-            DrawLineEx(rd.startPos, rd.endPos, rd.thickness, rd.color);
+        int texLoc = rlGetLocationUniform(particleRenderShader, "texture0");
+        int texUnit = 0;
+        rlSetUniform(texLoc, &texUnit, RL_SHADER_UNIFORM_INT, 1);
+        rlActiveTextureSlot(0);
+        rlEnableTexture(particleMaterial.maps[MATERIAL_MAP_DIFFUSE].texture.id);
+        
+        float fVinf_render = (float)flow.V_inf;
+        int r_ktlLoc = rlGetLocationUniform(particleRenderShader, "killTL");
+        int r_kbrLoc = rlGetLocationUniform(particleRenderShader, "killBR");
+        int r_vinfLoc = rlGetLocationUniform(particleRenderShader, "v_inf");
+        
+        float r_fKillTL[2] = {killTL.x, killTL.y};
+        float r_fKillBR[2] = {killBR.x, killBR.y};
+        rlSetUniform(r_ktlLoc, r_fKillTL, RL_SHADER_UNIFORM_VEC2, 1);
+        rlSetUniform(r_kbrLoc, r_fKillBR, RL_SHADER_UNIFORM_VEC2, 1);
+        rlSetUniform(r_vinfLoc, &fVinf_render, RL_SHADER_UNIFORM_FLOAT, 1);
+        
+        rlBindShaderBuffer(ssbo_particles, 5);
+        
+        rlEnableVertexArray(quadMesh.vaoId);
+        if (quadMesh.indices != nullptr) {
+            rlDrawVertexArrayElementsInstanced(0, quadMesh.triangleCount * 3, nullptr, targetParticleCount);
+        } else {
+            rlDrawVertexArrayInstanced(0, quadMesh.vertexCount, targetParticleCount);
         }
+        rlDisableVertexArray();
+        
+        rlDisableShader();
         
         EndBlendMode();
+
+        // Mask out particles inside the airfoil by drawing it filled with the background color
+        auto panels = rotatedFoil.getPanels();
+        if (!panels.empty()) {
+            std::vector<Vector2> airfoilPoints;
+            int leIndex = 0;
+            float minX = 1e9f;
+            for (int i = 0; i < panels.size(); ++i) {
+                Vector2 p = { (float)(panels[i].p1.x * renderScale), (float)(-panels[i].p1.y * renderScale) };
+                airfoilPoints.push_back(p);
+                if (p.x < minX) {
+                    minX = p.x;
+                    leIndex = i;
+                }
+            }
+            
+            // Draw triangles manually from the Leading Edge (LE) to every segment
+            // This perfectly fills the airfoil shape without bleeding or folding over itself
+            Vector2 le = airfoilPoints[leIndex];
+            for (size_t i = 0; i < airfoilPoints.size(); ++i) {
+                Vector2 p1 = airfoilPoints[i];
+                Vector2 p2 = airfoilPoints[(i + 1) % airfoilPoints.size()];
+                DrawTriangle(le, p2, p1, (Color){235, 240, 245, 255}); // Winding order counter-clockwise? Raylib culls backfaces sometimes, so draw both to be safe
+                DrawTriangle(le, p1, p2, (Color){235, 240, 245, 255});
+            }
+        }
 
         for (const auto& panel : rotatedFoil.getPanels()) {
             Vector2 p1 = { (float)(panel.p1.x * renderScale), (float)(-panel.p1.y * renderScale)};
@@ -360,7 +411,7 @@ void Simulation::run() {
                     if (foil.loadFromFile(fileBuf)) {
                         rebuildSolverWithRotation();
                         for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i)
-                            wind.particles[i].active = false;
+                            wind.particles[i].isActive = 0;
                         wind.activeCount = 0;
                         particleSpawnTimer = 0.0f;
                     }
@@ -386,7 +437,7 @@ void Simulation::run() {
                         windArrowDir = getWindArrowAngle(d);
                         rebuildSolverWithRotation();
                         for (int i = 0; i < WindSystem::MAX_PARTICLES; ++i)
-                            wind.particles[i].active = false;
+                            wind.particles[i].isActive = 0;
                         wind.activeCount = 0;
                         particleSpawnTimer = 0.0f;
                     }

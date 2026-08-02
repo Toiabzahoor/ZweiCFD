@@ -22,7 +22,7 @@ struct WindParticle {
     float alpha;
     float speedJitter;
     float velocityMag;
-    bool active;
+    int isActive;
     float age;
 };
 
@@ -53,7 +53,12 @@ private:
 
     Camera2D camera;
     WindSystem wind;
-    std::vector<ParticleRenderData> renderBuffer;
+    
+    unsigned int particleComputeShader;
+    unsigned int particleRenderShader;
+    unsigned int ssbo_particles;
+    Mesh quadMesh;
+    Material particleMaterial;
     
     float particleSpawnTimer;
     float displayedVelocity;

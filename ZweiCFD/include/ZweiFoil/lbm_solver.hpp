@@ -29,33 +29,46 @@ struct D3Q19 {
 struct Flowconditions;
 
 struct Vector3D {
-  double x, y, z;
+  float x, y, z;
+};
+
+struct Vector4D {
+  float x, y, z, w;
 };
 
 class Grid3D {
 public:
   Grid3D(int nx, int ny, int nz);
+  ~Grid3D();
 
   int getIndex(int x, int y, int z, int q) const;
   int getScalarIndex(int x, int y, int z) const;
 
   int NX, NY, NZ;
-  std::vector<double> f;
-  std::vector<double> f_new;
-  std::vector<bool> is_solid;
-  std::vector<double> rho;
-  std::vector<Vector3D> u;
+  std::vector<float> f;
+  std::vector<float> f_new;
+  std::vector<int> is_solid; // use int for std430 alignment
+  std::vector<float> rho;
+  std::vector<Vector4D> u; // vec4 for std430 alignment
+
+  unsigned int ssbo_f;
+  unsigned int ssbo_f_new;
+  unsigned int ssbo_is_solid;
+  unsigned int ssbo_rho;
+  unsigned int ssbo_u;
 
   void initialize(const Flowconditions &cond);
-  void enforceFreestream(const Flowconditions &cond);
-  void updateMacroscopic();
-  void collideAndStream(double tau);
-  void applyBoundaries();
+  void enforceFreestream(const Flowconditions &cond); // No longer needed if fully GPU, but keeping interface
+  void updateMacroscopic(); // No longer needed
+  void collideAndStream(double tau); // No longer needed
+  void applyBoundaries(); // No longer needed
 };
 
 class LBMSolver {
 public:
   LBMSolver(int nx, int ny, int nz);
+  ~LBMSolver();
+  
   void step(const Flowconditions &cond);
 
   const Grid3D &getGrid() const { return grid; }
@@ -63,7 +76,8 @@ public:
 
 private:
   Grid3D grid;
-  double tau;
+  float tau;
+  unsigned int computeShader;
 };
 
 } // namespace zweifoil

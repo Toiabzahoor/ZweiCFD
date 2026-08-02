@@ -57,13 +57,15 @@ public:
     
     bool isInsideAirfoil(const Point2D& pos) const;
 
+    VelocityGrid cachedGrid;
+    unsigned int ssbo_u = 0;
+
 private: 
     const Airfoil& targetAirfoil; 
     Eigen::VectorXd gamma; 
-    VelocityGrid cachedGrid;
 
     void calculateInfluenceCoefficients(Eigen::MatrixXd& A, Eigen::VectorXd& b, const Flowconditions& conditions); 
     void precomputeVelocityGrid(const Flowconditions& conditions);
 };
 
-} 
+}  
