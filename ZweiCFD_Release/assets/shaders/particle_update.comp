@@ -1,0 +1,287 @@
+#version 430
+layout(local_size_x = 256) in;
+
+struct Particle {
+    vec3 pos;
+    float pad1;
+    vec3 prevPos;
+    float pad2;
+    float baseSize;
+    float alpha;
+    float speedJitter;
+    float velocityMag;
+    int isActive;
+    float age;
+};
+
+layout(std430, binding = 5) buffer Particles {
+    Particle p[];
+};
+
+layout(std430, binding = 4) buffer U { vec4 u[]; };
+layout(std430, binding = 2) buffer SDF { float sdf[]; };
+layout(std430, binding = 6) buffer LVPMGrid { vec2 lvpm_u[]; };
+
+uniform int maxParticles;
+uniform float dt;
+uniform float renderScale;
+uniform int current_sim;
+uniform float v_inf;
+uniform float alpha_angle;
+uniform int windDirection;
+uniform int gridNX;
+uniform int gridNY;
+uniform int gridNZ;
+uniform float gridScale;
+uniform float lvpm_minX;
+uniform float lvpm_maxX;
+uniform float lvpm_minY;
+uniform float lvpm_maxY;
+uniform int lvpm_nx;
+uniform int lvpm_ny;
+uniform uint randomSeed;
+
+uniform vec3 spawnTL;
+uniform vec3 spawnBR;
+uniform vec3 killTL;
+uniform vec3 killBR;
+uniform float baseSpeed;
+uniform int has_lvpm;
+uniform vec3 mousePos;
+uniform int interactActive;
+uniform float interactRadius;
+
+float rand(vec2 co){
+    return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
+}
+
+vec3 getVelocity(vec3 physPos, out bool inside) {
+    vec3 vel = vec3(0.0);
+    inside = false;
+    
+    if (current_sim == 1) {
+        float x_exact = physPos.x * gridScale + float(gridNX) / 2.0;
+        float y_exact = physPos.y * gridScale + float(gridNY) / 2.0;
+        float z_exact = physPos.z * gridScale + float(gridNZ) / 2.0;
+        
+        int i0 = int(floor(x_exact));
+        int j0 = int(floor(y_exact));
+        int k0 = int(floor(z_exact));
+        
+        if (i0 >= 0 && i0 < gridNX - 1 && j0 >= 0 && j0 < gridNY - 1 && k0 >= 0 && k0 < gridNZ - 1) {
+            float tx = x_exact - float(i0);
+            float ty = y_exact - float(j0);
+            float tz = z_exact - float(k0);
+            
+            int i1 = i0 + 1;
+            int j1 = j0 + 1;
+            int k1 = k0 + 1;
+            
+            int i000 = k0 * gridNY * gridNX + j0 * gridNX + i0;
+            int i100 = k0 * gridNY * gridNX + j0 * gridNX + i1;
+            int i010 = k0 * gridNY * gridNX + j1 * gridNX + i0;
+            int i110 = k0 * gridNY * gridNX + j1 * gridNX + i1;
+            int i001 = k1 * gridNY * gridNX + j0 * gridNX + i0;
+            int i101 = k1 * gridNY * gridNX + j0 * gridNX + i1;
+            int i011 = k1 * gridNY * gridNX + j1 * gridNX + i0;
+            int i111 = k1 * gridNY * gridNX + j1 * gridNX + i1;
+            
+            float interp_sdf = 
+                (1.0-tx)*(1.0-ty)*(1.0-tz)*sdf[i000] + tx*(1.0-ty)*(1.0-tz)*sdf[i100] +
+                (1.0-tx)*ty*(1.0-tz)*sdf[i010] + tx*ty*(1.0-tz)*sdf[i110] +
+                (1.0-tx)*(1.0-ty)*tz*sdf[i001] + tx*(1.0-ty)*tz*sdf[i101] +
+                (1.0-tx)*ty*tz*sdf[i011] + tx*ty*tz*sdf[i111];
+            
+            if (interp_sdf <= 0.0) {
+                inside = true;
+            }
+            
+            vec3 v000 = u[i000].xyz; vec3 v100 = u[i100].xyz;
+            vec3 v010 = u[i010].xyz; vec3 v110 = u[i110].xyz;
+            vec3 v001 = u[i001].xyz; vec3 v101 = u[i101].xyz;
+            vec3 v011 = u[i011].xyz; vec3 v111 = u[i111].xyz;
+            
+            vec3 interp_vel = 
+                (1.0-tx)*(1.0-ty)*(1.0-tz)*v000 + tx*(1.0-ty)*(1.0-tz)*v100 +
+                (1.0-tx)*ty*(1.0-tz)*v010 + tx*ty*(1.0-tz)*v110 +
+                (1.0-tx)*(1.0-ty)*tz*v001 + tx*(1.0-ty)*tz*v101 +
+                (1.0-tx)*ty*tz*v011 + tx*ty*tz*v111;
+                
+            float lbm_scale = v_inf / max(0.0001, 0.05); 
+            
+            // Map LBM velocity vector to World Space (note Y coordinate invert)
+            vel = vec3(interp_vel.x * lbm_scale, -interp_vel.y * lbm_scale, interp_vel.z * lbm_scale);
+                          
+            if (isnan(vel.x) || isnan(vel.y) || isnan(vel.z) || isinf(vel.x) || isinf(vel.y) || isinf(vel.z)) {
+                vel = vec3(0.0);
+                inside = true;
+            } else if (length(vel) > v_inf * 5.0) {
+                vel = normalize(vel) * v_inf * 5.0;
+            }
+        } else {
+            // Freestream fallback outside LBM grid
+            float vx = v_inf;
+            float vy = 0.0;
+            if (windDirection == 1) { vx = -v_inf; vy = 0.0; }
+            else if (windDirection == 2) { vx = 0.0; vy = -v_inf; }
+            else if (windDirection == 3) { vx = 0.0; vy = v_inf; }
+            vel = vec3(vx, vy, 0.0);
+        }
+    } else {
+        float minX = lvpm_minX;
+        float maxX = lvpm_maxX;
+        float minY = lvpm_minY;
+        float maxY = lvpm_maxY;
+        int nx = lvpm_nx;
+        int ny = lvpm_ny;
+        
+        float px = physPos.x;
+        float py = physPos.y;
+        
+        if (has_lvpm == 1 && px >= minX && px <= maxX && py >= minY && py <= maxY) {
+            float x_idx = (px - minX) / ((maxX - minX) / float(nx - 1));
+            float y_idx = (py - minY) / ((maxY - minY) / float(ny - 1));
+            
+            int i0 = int(floor(x_idx));
+            int j0 = int(floor(y_idx));
+            
+            if (i0 < 0) i0 = 0; if (i0 >= nx - 1) i0 = nx - 2;
+            if (j0 < 0) j0 = 0; if (j0 >= ny - 1) j0 = ny - 2;
+            
+            float tx = x_idx - float(i0);
+            float ty = y_idx - float(j0);
+            
+            vec2 v00 = lvpm_u[j0 * nx + i0];
+            vec2 v10 = lvpm_u[j0 * nx + i0 + 1];
+            vec2 v01 = lvpm_u[(j0 + 1) * nx + i0];
+            vec2 v11 = lvpm_u[(j0 + 1) * nx + i0 + 1];
+            
+            vec2 interp_vel = 
+                (1.0 - tx) * (1.0 - ty) * v00 + 
+                tx * (1.0 - ty) * v10 + 
+                (1.0 - tx) * ty * v01 + 
+                tx * ty * v11;
+                
+            vel = vec3(interp_vel.x, interp_vel.y, 0.0);
+        } else {
+            float vx = v_inf * cos(alpha_angle * 3.14159 / 180.0);
+            float vy = v_inf * sin(alpha_angle * 3.14159 / 180.0);
+            
+            if (windDirection == 1) { vx = -vx; vy = -vy; }
+            else if (windDirection == 2) { float t = vx; vx = vy; vy = -t; }
+            else if (windDirection == 3) { float t = vx; vx = -vy; vy = t; }
+            
+            vel = vec3(vx, vy, 0.0);
+        }
+    }
+    return vel;
+}
+
+uint hash(uint x) {
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
+
+float randomFloat(uint seed) {
+    return float(hash(seed)) / 4294967295.0;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= maxParticles) return;
+    
+    if (p[idx].isActive == 0) {
+        p[idx].isActive = 1;
+        p[idx].age = 0.0;
+        
+        float rx = randomFloat(idx * 3u + randomSeed);
+        float ry = randomFloat(idx * 3u + 1u + randomSeed);
+        float rz = randomFloat(idx * 3u + 2u + randomSeed);
+        
+        p[idx].baseSize = 0.005 + randomFloat(idx * 4u + randomSeed) * 0.015;
+        p[idx].alpha = 0.5 + randomFloat(idx * 4u + 1u + randomSeed) * 0.5;
+        p[idx].speedJitter = 0.5 + randomFloat(idx * 4u + 2u + randomSeed) * 1.0;
+        p[idx].pos.x = spawnTL.x + rx * (spawnBR.x - spawnTL.x);
+        p[idx].pos.y = spawnTL.y + ry * (spawnBR.y - spawnTL.y);
+        p[idx].pos.z = spawnTL.z + rz * (spawnBR.z - spawnTL.z);
+        
+        p[idx].prevPos = p[idx].pos;
+        return;
+    }
+    
+    p[idx].prevPos = p[idx].pos;
+    p[idx].age += dt;
+    
+    int numSubSteps = 1;
+    float subDt = dt / float(numSubSteps);
+    
+    for (int step = 0; step < numSubSteps; ++step) {
+        vec3 physPos = vec3(p[idx].pos.x / renderScale, -p[idx].pos.y / renderScale, p[idx].pos.z / renderScale);
+        bool inside = false;
+        vec3 vel = getVelocity(physPos, inside);
+        
+        if (inside) {
+            p[idx].isActive = 0;
+            return;
+        }
+        
+        if (step == 0) {
+            p[idx].velocityMag = length(vel);
+        }
+        
+        // Update particle position using consistent world-space velocity
+        float stepScale = baseSpeed * p[idx].speedJitter * subDt;
+        p[idx].pos += vel * stepScale;
+
+        // Add small z-axis turbulence
+        float zTurbulence = (randomFloat(idx * 7u + uint(p[idx].age * 100.0)) - 0.5) * 5.0;
+        p[idx].pos.z += zTurbulence * subDt;
+
+        // Check bounds and recycle at inflow edge
+        if (p[idx].pos.x < killTL.x || p[idx].pos.x > killBR.x ||
+            p[idx].pos.y < killTL.y || p[idx].pos.y > killBR.y ||
+            p[idx].pos.z < killTL.z || p[idx].pos.z > killBR.z) {
+                         
+            float rx = randomFloat(idx * 6u + uint(p[idx].age * 1000.0) + randomSeed);
+            float ry = randomFloat(idx * 6u + 1u + uint(p[idx].age * 1000.0) + randomSeed);
+            float rz = randomFloat(idx * 6u + 2u + uint(p[idx].age * 1000.0) + randomSeed);
+                         
+            if (windDirection == 0) { // From Left
+                p[idx].pos.x = spawnTL.x;
+                p[idx].pos.y = spawnTL.y + ry * (spawnBR.y - spawnTL.y);
+                p[idx].pos.z = spawnTL.z + rz * (spawnBR.z - spawnTL.z);
+            } else if (windDirection == 1) { // From Right
+                p[idx].pos.x = spawnBR.x;
+                p[idx].pos.y = spawnTL.y + ry * (spawnBR.y - spawnTL.y);
+                p[idx].pos.z = spawnTL.z + rz * (spawnBR.z - spawnTL.z);
+            } else if (windDirection == 2) { // From Top
+                p[idx].pos.y = spawnTL.y; // Spawn at Top boundary (-Y in world space)
+                p[idx].pos.x = spawnTL.x + rx * (spawnBR.x - spawnTL.x);
+                p[idx].pos.z = spawnTL.z + rz * (spawnBR.z - spawnTL.z);
+            } else if (windDirection == 3) { // From Bottom
+                p[idx].pos.y = spawnBR.y; // Spawn at Bottom boundary (+Y in world space)
+                p[idx].pos.x = spawnTL.x + rx * (spawnBR.x - spawnTL.x);
+                p[idx].pos.z = spawnTL.z + rz * (spawnBR.z - spawnTL.z);
+            }
+                         
+            p[idx].prevPos = p[idx].pos;
+            p[idx].age = 0.0;
+            return;
+        }
+        
+        // Opacity and force based on interaction
+        if (interactActive == 1) {
+            vec3 diff = physPos - mousePos;
+            float dist = length(diff);
+            if (dist < interactRadius) {
+                p[idx].pos.x += diff.x * subDt * 50.0;
+                p[idx].pos.y -= diff.y * subDt * 50.0;
+                p[idx].alpha = min(1.0, p[idx].alpha + 2.0 * subDt);
+            }
+        }
+    }
+}

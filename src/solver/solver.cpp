@@ -1,10 +1,10 @@
-#include "ZweiFoil/solver.hpp"
+#include "ZweiCFD/solver/solver.hpp"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
 #include <omp.h>
 
-namespace zweifoil {
+namespace zweicfd {
 
 Solver::Solver(const Airfoil& airfoil)
     : targetAirfoil(airfoil), inviscidEngine(std::make_unique<InviscidLVPM>(airfoil)) {}

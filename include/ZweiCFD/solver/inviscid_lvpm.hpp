@@ -1,10 +1,9 @@
 #pragma once 
-#include "ZweiFoil/airfoil.hpp" 
+#include "ZweiCFD/solver/airfoil.hpp" 
 #include <Eigen/Dense> 
+#include "ZweiCFD/solver/flowconditions.hpp"
+namespace zweicfd { 
 
-namespace zweifoil { 
-
-struct Flowconditions; 
 struct Coefficients; 
 
 struct VelocityGrid {
@@ -48,6 +47,7 @@ struct VelocityGrid {
 class InviscidLVPM { 
 public: 
     InviscidLVPM(const Airfoil& airfoil); 
+    ~InviscidLVPM();
          
     Coefficients solve(const Flowconditions& conditions); 
     const Eigen::VectorXd& getGammaDistribution() const { return gamma; } 
@@ -58,7 +58,6 @@ public:
     bool isInsideAirfoil(const Point2D& pos) const;
 
     VelocityGrid cachedGrid;
-    unsigned int ssbo_u = 0;
 
 private: 
     const Airfoil& targetAirfoil; 

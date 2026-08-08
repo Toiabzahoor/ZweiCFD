@@ -1,11 +1,12 @@
-#include "ZweiFoil/airfoil.hpp"
+#include "ZweiCFD/solver/airfoil.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#define _USE_MATH_DEFINES
 #include <cmath>
 #include <algorithm>
 
-namespace zweifoil {
+namespace zweicfd {
 
 Airfoil::Airfoil() : name("unknown") {}
 
@@ -20,7 +21,10 @@ static void loadDummyDiamond(std::string& name, std::vector<Point2D>& coordinate
     };
 }
 
-bool Airfoil::loadFromFile(const std::string& filename) {
+bool Airfoil::loadFromFile(const std::string& raw_filename) {
+    size_t start = raw_filename.find_first_not_of(" \t\r\n");
+    std::string filename = (start == std::string::npos) ? "" : raw_filename.substr(start, raw_filename.find_last_not_of(" \t\r\n") - start + 1);
+
     std::cout << "Loading airfoil coords from: " << filename << "...\n";
     std::ifstream file(filename);
     
@@ -52,12 +56,27 @@ bool Airfoil::loadFromFile(const std::string& filename) {
         firstLine = false;
     }
 
+    file.close();
+
     if (parsed.size() < 3) {
         std::cerr << "  File '" << filename << "' had too few coordinate points ("
                   << parsed.size() << "), using dummy airfoil instead.\n";
         loadDummyDiamond(name, coordinates);
         generatePanels();
         return true;
+    }
+
+    
+    double minX = std::numeric_limits<double>::max();
+    double maxX = std::numeric_limits<double>::lowest();
+    for (const auto& p : parsed) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+    }
+    double scale = (maxX - minX > 1e-6) ? 1.0 / (maxX - minX) : 1.0;
+    for (auto& p : parsed) {
+        p.x = (p.x - minX) * scale;
+        p.y = p.y * scale;
     }
 
     if (std::abs(parsed.front().x - parsed.back().x) > 1e-5 || 
@@ -103,19 +122,19 @@ void Airfoil::generatePanels() {
         double dx = p.p2.x - p.p1.x;
         double dy = p.p2.y - p.p1.y;
 
-        //collocation point (midpoint)
+        
         p.cp.x = (p.p1.x + p.p2.x) / 2.0;
         p.cp.y = (p.p1.y + p.p2.y) / 2.0;
         
-        //length & angle 
+        
         p.length = std::sqrt(dx * dx + dy * dy);
         p.theta = std::atan2(dy, dx);
 
-        //tangent vector
+        
         p.tangent.x = std::cos(p.theta);
         p.tangent.y = std::sin(p.theta);
 
-        //normal vector
+        
         p.normal.x = -std::sin(p.theta);
         p.normal.y = std::cos(p.theta);
 
@@ -142,4 +161,75 @@ void Airfoil::rotateCoordinates(double angleDeg) {
     generatePanels();
 }
 
+void Airfoil::generateNACA(double m, double p, double t, int n) {
+    std::vector<Point2D> xu, xl;
+    
+    for (int i = 0; i < n; ++i) {
+        double beta = M_PI * i / (n - 1);
+        double x = 0.5 * (1.0 - std::cos(beta));
+        
+        
+        double yt = 5.0 * t * (0.2969 * std::sqrt(x) - 0.1260 * x - 0.3516 * x * x + 0.2843 * x * x * x - 0.1036 * x * x * x * x);
+        
+        double yc = 0.0, dyc_dx = 0.0;
+        if (p > 0.0) {
+            if (x < p) {
+                yc = m / (p * p) * (2 * p * x - x * x);
+                dyc_dx = 2 * m / (p * p) * (p - x);
+            } else {
+                yc = m / ((1 - p) * (1 - p)) * ((1 - 2 * p) + 2 * p * x - x * x);
+                dyc_dx = 2 * m / ((1 - p) * (1 - p)) * (p - x);
+            }
+        }
+        
+        double theta = std::atan(dyc_dx);
+        
+        Point2D p_upper = {x - yt * std::sin(theta), yc + yt * std::cos(theta)};
+        Point2D p_lower = {x + yt * std::sin(theta), yc - yt * std::cos(theta)};
+        
+        xu.push_back(p_upper);
+        xl.push_back(p_lower);
+    }
+
+    coordinates.clear();
+    
+    for (int i = n - 1; i >= 0; --i) {
+        coordinates.push_back(xu[i]);
+    }
+    
+    for (int i = 1; i < n; ++i) {
+        coordinates.push_back(xl[i]);
+    }
+    
+    
+    coordinates.push_back(coordinates.front());
+
+    
+    int m_digit = std::round(m * 100);
+    int p_digit = std::round(p * 10);
+    int t_digit = std::round(t * 100);
+    name = "NACA " + std::to_string(m_digit) + std::to_string(p_digit) + (t_digit < 10 ? "0" : "") + std::to_string(t_digit);
+    
+    
+    double area = 0.0;
+    for (size_t i = 0; i < coordinates.size() - 1; ++i) {
+        area += (coordinates[i].x * coordinates[i+1].y - coordinates[i+1].x * coordinates[i].y);
+    }
+    if (area > 0.0) { 
+        std::reverse(coordinates.begin(), coordinates.end());
+    }
+
+    generatePanels();
 }
+
+void Airfoil::generateCylinder(double radius, int n) {
+    coordinates.clear();
+    name = "Cylinder";
+    for (int i = 0; i < n; ++i) {
+        double theta = -2.0 * M_PI * i / n;
+        coordinates.push_back({0.5 + radius * std::cos(theta), radius * std::sin(theta)});
+    }
+    generatePanels();
+}
+
+} 

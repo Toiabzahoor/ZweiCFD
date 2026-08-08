@@ -1,12 +1,15 @@
-#include "ZweiFoil/inviscid_lvpm.hpp" 
-#include "ZweiFoil/solver.hpp" 
+#include "ZweiCFD/solver/inviscid_lvpm.hpp" 
+#include "ZweiCFD/solver/solver.hpp" 
 #include <iostream> 
 #include <cmath> 
 #include <omp.h>
 
-namespace zweifoil { 
+namespace zweicfd { 
 
 InviscidLVPM::InviscidLVPM(const Airfoil& airfoil) : targetAirfoil(airfoil) {} 
+
+InviscidLVPM::~InviscidLVPM() {
+}
 
 Coefficients InviscidLVPM::solve(const Flowconditions& conditions) { 
     const auto& panels = targetAirfoil.getPanels(); 
@@ -27,10 +30,32 @@ Coefficients InviscidLVPM::solve(const Flowconditions& conditions) {
     } 
 
     double chord = 1.0; 
-    double cl = (2.0 * total_circulation) / (conditions.V_inf * chord); 
-         
-    double cd = 0.0;          
-    double cm = 0.0;  
+    
+    double cx = 0.0;
+    double cy = 0.0;
+    double cm_c4 = 0.0;
+    
+    for (int i = 0; i < N; ++i) {
+        double V_t = 0.5 * (gamma(i) + gamma(i + 1));
+        double Cp = 1.0 - (V_t * V_t) / (conditions.V_inf * conditions.V_inf);
+        
+        double dFx = -Cp * panels[i].normal.x * panels[i].length;
+        double dFy = -Cp * panels[i].normal.y * panels[i].length;
+        
+        cx += dFx;
+        cy += dFy;
+        
+        
+        double dx = panels[i].cp.x - 0.25;
+        double dy = panels[i].cp.y - 0.0;
+        cm_c4 += (dFy * dx - dFx * dy);
+    }
+    
+    
+    double alpha_rad = conditions.alpha * (M_PI / 180.0);
+    double cd = cx * std::cos(alpha_rad) + cy * std::sin(alpha_rad);
+    double cl = cy * std::cos(alpha_rad) - cx * std::sin(alpha_rad);
+    double cm = cm_c4;
 
     precomputeVelocityGrid(conditions);
     return {cl, cd, cm}; 
@@ -95,8 +120,9 @@ void InviscidLVPM::calculateInfluenceCoefficients(Eigen::MatrixXd& A, Eigen::Vec
                                  
                 double d_theta = theta2 - theta1; 
                                  
-                while (d_theta > M_PI) d_theta -= 2.0 * M_PI; 
-                while (d_theta < -M_PI) d_theta += 2.0 * M_PI; 
+                if (std::isnan(d_theta)) d_theta = 0.0;
+                else if (d_theta > M_PI) d_theta -= 2.0 * M_PI; 
+                else if (d_theta < -M_PI) d_theta += 2.0 * M_PI; 
 
                 double term1 = std::log(r1 / r2); 
 
@@ -160,8 +186,9 @@ Point2D InviscidLVPM::getExactVelocityAt(const Point2D& pos, const Flowcondition
         double theta2 = std::atan2(z, x - S);
         double d_theta = theta2 - theta1;
         
-        while (d_theta > M_PI) d_theta -= 2.0 * M_PI;
-        while (d_theta < -M_PI) d_theta += 2.0 * M_PI;
+        if (std::isnan(d_theta)) d_theta = 0.0;
+        else if (d_theta > M_PI) d_theta -= 2.0 * M_PI;
+        else if (d_theta < -M_PI) d_theta += 2.0 * M_PI;
         
         double term1 = std::log(r1 / r2);
         
@@ -206,7 +233,7 @@ void InviscidLVPM::precomputeVelocityGrid(const Flowconditions& conditions) {
     }
 }
 
-// Ray casting algorithm to check if a point is inside the airfoil polygon
+
 bool InviscidLVPM::isInsideAirfoil(const Point2D& pos) const {
     const auto& coords = targetAirfoil.getCoordinates();
     if (coords.size() < 3) return false;
@@ -222,4 +249,4 @@ bool InviscidLVPM::isInsideAirfoil(const Point2D& pos) const {
     return inside;
 }
 
-} // namespace zweifoil
+} 

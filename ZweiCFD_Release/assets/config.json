@@ -1,0 +1,9 @@
+{
+  "targetParticleCount": 10000,
+  "lbmGridNX": 64,
+  "lbmGridNY": 32,
+  "lbmGridNZ": 32,
+  "alpha": 5.0,
+  "v_inf": 1.0,
+  "kinematicViscosity": 1.5e-5
+}

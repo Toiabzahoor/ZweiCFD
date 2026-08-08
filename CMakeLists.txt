@@ -1,98 +1,97 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(ZweiFoil CXX)
+project(ZweiCFD CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTORCC ON)
+
+find_package(Qt6 COMPONENTS Widgets REQUIRED)
+
 include(FetchContent)
 
-FetchContent_Declare(
-    raylib
-    GIT_REPOSITORY https://github.com/raysan5/raylib.git
-    GIT_TAG        master
-)
-FetchContent_MakeAvailable(raylib)
-
-FetchContent_Declare(
-    rlImGui
-    GIT_REPOSITORY https://github.com/raylib-extras/rlImGui.git
-    GIT_TAG        main
-)
-FetchContent_MakeAvailable(rlImGui)
-
-FetchContent_Declare(
-    imgui
-    GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG        master
-)
-FetchContent_MakeAvailable(imgui)
-
-set(RLIMGUI_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/rlimgui-src")
-set(IMGUI_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/imgui-src")
-if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/_deps/rlimgui-src/rlImGui.cpp")
-    set(RLIMGUI_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/rlimgui-src")
-elseif(DEFINED rlImGui_SOURCE_DIR AND EXISTS "${rlImGui_SOURCE_DIR}/rlImGui.cpp")
-    set(RLIMGUI_SOURCE_DIR "${rlImGui_SOURCE_DIR}")
-elseif(DEFINED rlimgui_SOURCE_DIR AND EXISTS "${rlimgui_SOURCE_DIR}/rlImGui.cpp")
-    set(RLIMGUI_SOURCE_DIR "${rlimgui_SOURCE_DIR}")
-endif()
-if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/_deps/imgui-src/imgui.cpp")
-    set(IMGUI_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/imgui-src")
-elseif(DEFINED imgui_SOURCE_DIR AND EXISTS "${imgui_SOURCE_DIR}/imgui.cpp")
-    set(IMGUI_SOURCE_DIR "${imgui_SOURCE_DIR}")
-elseif(DEFINED imgui_SOURCE_DIR AND EXISTS "${imgui_SOURCE_DIR}/imgui.h")
-    set(IMGUI_SOURCE_DIR "${imgui_SOURCE_DIR}")
-endif()
 
 include_directories(include)
 
-add_library(imgui_static STATIC
-    ${IMGUI_SOURCE_DIR}/imgui.cpp
-    ${IMGUI_SOURCE_DIR}/imgui_draw.cpp
-    ${IMGUI_SOURCE_DIR}/imgui_tables.cpp
-    ${IMGUI_SOURCE_DIR}/imgui_widgets.cpp
+find_package(VTK REQUIRED COMPONENTS
+    CommonCore
+    CommonDataModel
+    RenderingCore
+    RenderingOpenGL2
+    InteractionStyle
+    GUISupportQt
+    FiltersModeling
+    FiltersFlowPaths
+    IOGeometry
 )
-target_include_directories(imgui_static PUBLIC ${IMGUI_SOURCE_DIR})
-
-add_library(rlImGui_static STATIC
-    ${RLIMGUI_SOURCE_DIR}/rlImGui.cpp
-)
-target_include_directories(rlImGui_static PUBLIC
-    ${RLIMGUI_SOURCE_DIR}
-    ${IMGUI_SOURCE_DIR}
-)
-target_link_libraries(rlImGui_static PUBLIC raylib imgui_static)
 
 add_executable(ZweiCFD
-    src/main.cpp
-    src/airfoil.cpp
-    src/solver.cpp
-    src/simulation.cpp
-    src/inviscid_lvpm.cpp
-    src/lbm_solver.cpp
-)
-target_include_directories(ZweiCFD PRIVATE
-    ${raylib_SOURCE_DIR}/src
-    ${eigen_SOURCE_DIR}
+    src/core/main.cpp
+    src/solver/airfoil.cpp
+    src/solver/solver.cpp
+    src/core/simulation.cpp
+    src/solver/inviscid_lvpm.cpp
+    src/solver/lbm_solver.cpp
+    src/core/config.cpp
+    src/ui/main_window.cpp
+    include/ZweiCFD/ui/main_window.hpp
 )
 FetchContent_Declare(
     eigen
     GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
     GIT_TAG        3.4.0
 )
-FetchContent_MakeAvailable(eigen)
+FetchContent_GetProperties(eigen)
+if(NOT eigen_POPULATED)
+    FetchContent_Populate(eigen)
+endif()
 
-find_package(OpenMP REQUIRED)
-target_link_libraries(ZweiCFD PRIVATE raylib imgui_static rlImGui_static Eigen3::Eigen OpenMP::OpenMP_CXX)
+target_include_directories(ZweiCFD PRIVATE
+    ${eigen_SOURCE_DIR}
+    ${VTK_INCLUDE_DIRS}
+)
+
+target_compile_options(ZweiCFD PRIVATE -fopenmp)
+target_link_libraries(ZweiCFD PRIVATE ${VTK_LIBRARIES} Qt6::Widgets)
 
 if(MINGW OR WIN32)
-    target_link_options(ZweiCFD PRIVATE -static -static-libgcc -static-libstdc++)
+    target_link_options(ZweiCFD PRIVATE -fopenmp -static -static-libgcc -static-libstdc++)
 endif()
+
+add_executable(ExtractProfile extract_profile.cpp)
+target_include_directories(ExtractProfile PRIVATE ${VTK_INCLUDE_DIRS})
+target_link_libraries(ExtractProfile PRIVATE ${VTK_LIBRARIES})
+
 
 add_custom_command(TARGET ZweiCFD POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${CMAKE_CURRENT_SOURCE_DIR}/../naca0012.dat"
+    "${CMAKE_CURRENT_SOURCE_DIR}/naca0012.dat"
     $<TARGET_FILE_DIR:ZweiCFD>
     VERBATIM
 )
+
+add_custom_command(TARGET ZweiCFD POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+    "$<TARGET_FILE_DIR:ZweiCFD>/assets"
+    VERBATIM
+)
+
+# Copy all required DLL dependencies to the build output directory
+add_custom_command(TARGET ZweiCFD POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:ZweiCFD> $<TARGET_FILE_DIR:ZweiCFD>
+    COMMAND_EXPAND_LISTS
+    VERBATIM
+)
+
+# Run windeployqt to bundle Qt plugins and dependencies
+find_program(WINDEPLOYQT_EXECUTABLE windeployqt)
+if(WINDEPLOYQT_EXECUTABLE)
+    add_custom_command(TARGET ZweiCFD POST_BUILD
+        COMMAND "${WINDEPLOYQT_EXECUTABLE}" "$<TARGET_FILE:ZweiCFD>"
+        COMMENT "Running windeployqt to copy Qt dependencies..."
+    )
+endif()

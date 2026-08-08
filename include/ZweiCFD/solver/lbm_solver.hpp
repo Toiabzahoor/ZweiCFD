@@ -3,8 +3,10 @@
 #include <array>
 #include <memory>
 #include <vector>
-// adding 3d solver for lbm
-namespace zweifoil {
+
+#include "ZweiCFD/solver/flowconditions.hpp"
+
+namespace zweicfd {
 
 struct D3Q19 {
   static constexpr int Q = 19;
@@ -26,7 +28,6 @@ struct D3Q19 {
       0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15, 18, 17};
 };
 
-struct Flowconditions;
 
 struct Vector3D {
   float x, y, z;
@@ -41,27 +42,34 @@ public:
   Grid3D(int nx, int ny, int nz);
   ~Grid3D();
 
-  int getIndex(int x, int y, int z, int q) const;
-  int getScalarIndex(int x, int y, int z) const;
+  
+  Grid3D(const Grid3D&) = delete;
+  Grid3D& operator=(const Grid3D&) = delete;
+  Grid3D(Grid3D&&) = delete;
+  Grid3D& operator=(Grid3D&&) = delete;
+
+  inline int getIndex(int x, int y, int z, int q) const {
+    return q * (NZ * NY * NX) + (z * NY * NX + y * NX + x);
+  }
+  inline int getScalarIndex(int x, int y, int z) const {
+    return z * NY * NX + y * NX + x;
+  }
 
   int NX, NY, NZ;
   std::vector<float> f;
   std::vector<float> f_new;
-  std::vector<float> sdf; // Signed Distance Field for Bouzidi Interpolation
+  std::vector<float> sdf; 
+  std::vector<float> drawn_sdf;
   std::vector<float> rho;
-  std::vector<Vector4D> u; // vec4 for std430 alignment
+  std::vector<Vector4D> u; 
 
-  unsigned int ssbo_f;
-  unsigned int ssbo_f_new;
-  unsigned int ssbo_sdf;
-  unsigned int ssbo_rho;
-  unsigned int ssbo_u;
+  double force_x = 0.0;
+  double force_y = 0.0;
 
   void initialize(const Flowconditions &cond);
-  void enforceFreestream(const Flowconditions &cond); // No longer needed if fully GPU, but keeping interface
-  void updateMacroscopic(); // No longer needed
-  void collideAndStream(double tau); // No longer needed
-  void applyBoundaries(); // No longer needed
+  void enforceFreestream(const Flowconditions &cond); 
+  void computeStep(double tau); 
+  void applyBoundaries(); 
 };
 
 class LBMSolver {
@@ -77,7 +85,9 @@ public:
 private:
   Grid3D grid;
   float tau;
-  unsigned int computeShader;
+  
+  int stepCount = 0;
+  bool pingPong = false;
 };
 
-} // namespace zweifoil
+} 

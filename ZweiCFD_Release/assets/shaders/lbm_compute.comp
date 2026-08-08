@@ -1,0 +1,151 @@
+#version 430
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout(std430, binding = 0) buffer F { float f[]; };
+layout(std430, binding = 1) buffer FNew { float f_new[]; };
+layout(std430, binding = 2) buffer SDF { float sdf[]; };
+layout(std430, binding = 3) buffer Rho { float rho[]; };
+layout(std430, binding = 4) buffer U { vec4 u[]; };
+
+uniform int NX;
+uniform int NY;
+uniform int NZ;
+uniform float tau;
+uniform float vx_inf;
+uniform float vy_inf;
+uniform float vz_inf;
+
+const int cx[19] = int[](0, 1, -1, 0, 0, 0, 0, 1, -1, 1, -1, 1, -1, 1, -1, 0, 0, 0, 0);
+const int cy[19] = int[](0, 0, 0, 1, -1, 0, 0, 1, -1, -1, 1, 0, 0, 0, 0, 1, -1, 1, -1);
+const int cz[19] = int[](0, 0, 0, 0, 0, 1, -1, 0, 0, 0, 0, 1, -1, -1, 1, 1, -1, -1, 1);
+const float w[19] = float[](
+    1.0/3.0,  1.0/18.0, 1.0/18.0, 1.0/18.0, 1.0/18.0,
+    1.0/18.0, 1.0/18.0, 1.0/36.0, 1.0/36.0, 1.0/36.0,
+    1.0/36.0, 1.0/36.0, 1.0/36.0, 1.0/36.0, 1.0/36.0,
+    1.0/36.0, 1.0/36.0, 1.0/36.0, 1.0/36.0
+);
+const int opposite[19] = int[](
+    0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15, 18, 17
+);
+
+int getIndex(int x, int y, int z, int q) {
+    return (z * NY * NX + y * NX + x) * 19 + q;
+}
+
+int getScalarIndex(int x, int y, int z) {
+    return z * NY * NX + y * NX + x;
+}
+
+void main() {
+    ivec3 pos = ivec3(gl_GlobalInvocationID.xyz);
+    if (pos.x >= NX || pos.y >= NY || pos.z >= NZ) return;
+    
+    int x = pos.x;
+    int y = pos.y;
+    int z = pos.z;
+    int s_idx = getScalarIndex(x, y, z);
+    
+    bool is_boundary = (x == 0 || x == NX-1 || y == 0 || y == NY-1 || z == 0 || z == NZ-1) && sdf[s_idx] > -0.5;
+    
+    if (is_boundary) {
+        rho[s_idx] = 1.0;
+        u[s_idx] = vec4(vx_inf, vy_inf, vz_inf, 0.0);
+        float usq = vx_inf*vx_inf + vy_inf*vy_inf + vz_inf*vz_inf;
+        for (int q = 0; q < 19; ++q) {
+            float cu = cx[q]*vx_inf + cy[q]*vy_inf + cz[q]*vz_inf;
+            float feq = w[q] * (1.0 + 3.0*cu + 4.5*cu*cu - 1.5*usq);
+            
+            int nx = x + cx[q];
+            int ny = y + cy[q];
+            int nz = z + cz[q];
+            if (nx >= 0 && nx < NX && ny >= 0 && ny < NY && nz >= 0 && nz < NZ) {
+                if (sdf[getScalarIndex(nx, ny, nz)] > -0.5) {
+                    f_new[getIndex(nx, ny, nz, q)] = feq;
+                }
+            }
+        }
+    } else if (sdf[s_idx] > -0.5) {
+        float density = 0.0;
+        vec3 vel = vec3(0.0);
+        for (int q = 0; q < 19; ++q) {
+            float val = f[getIndex(x, y, z, q)];
+            density += val;
+            vel.x += val * cx[q];
+            vel.y += val * cy[q];
+            vel.z += val * cz[q];
+        }
+        
+        rho[s_idx] = density;
+        vec4 u_val = vec4(0.0);
+        if (density > 1e-9) {
+            u_val = vec4(vel / density, 0.0);
+        }
+        u[s_idx] = u_val;
+        
+        float usq = u_val.x*u_val.x + u_val.y*u_val.y + u_val.z*u_val.z;
+        
+        float Pi_xx = 0.0, Pi_yy = 0.0, Pi_zz = 0.0;
+        float Pi_xy = 0.0, Pi_xz = 0.0, Pi_yz = 0.0;
+        for (int q = 0; q < 19; ++q) {
+            float f_q = f[getIndex(x, y, z, q)];
+            float cu = cx[q]*u_val.x + cy[q]*u_val.y + cz[q]*u_val.z;
+            float feq = w[q] * density * (1.0 + 3.0*cu + 4.5*cu*cu - 1.5*usq);
+            float f_neq = f_q - feq;
+            Pi_xx += f_neq * cx[q] * cx[q];
+            Pi_yy += f_neq * cy[q] * cy[q];
+            Pi_zz += f_neq * cz[q] * cz[q];
+            Pi_xy += f_neq * cx[q] * cy[q];
+            Pi_xz += f_neq * cx[q] * cz[q];
+            Pi_yz += f_neq * cy[q] * cz[q];
+        }
+        float Pi_mag = sqrt(Pi_xx*Pi_xx + Pi_yy*Pi_yy + Pi_zz*Pi_zz + 2.0*(Pi_xy*Pi_xy + Pi_xz*Pi_xz + Pi_yz*Pi_yz));
+        float C_smag = 0.16;
+        float tau_eff = 0.5 * (tau + sqrt(tau*tau + 18.0 * C_smag*C_smag * Pi_mag / max(density, 1e-9)));
+        float omega = 1.0 / tau_eff;
+        
+        for (int q = 0; q < 19; ++q) {
+            float cu = cx[q]*u_val.x + cy[q]*u_val.y + cz[q]*u_val.z;
+            float feq = w[q] * density * (1.0 + 3.0*cu + 4.5*cu*cu - 1.5*usq);
+            
+            float f_post = f[getIndex(x, y, z, q)] - omega * (f[getIndex(x, y, z, q)] - feq);
+            
+            int nx = x + cx[q];
+            int ny = y + cy[q];
+            int nz = z + cz[q];
+            
+            if (nx >= 0 && nx < NX && ny >= 0 && ny < NY && nz >= 0 && nz < NZ) {
+                if (sdf[getScalarIndex(nx, ny, nz)] > -0.5) {
+                    f_new[getIndex(nx, ny, nz, q)] = f_post;
+                } else {
+                    float sdf_x = sdf[s_idx];
+                    float sdf_nx = sdf[getScalarIndex(nx, ny, nz)];
+                    float q_dist = sdf_x / max(1e-6, sdf_x - sdf_nx);
+                    
+                    int prev_x = x - cx[q];
+                    int prev_y = y - cy[q];
+                    int prev_z = z - cz[q];
+                    
+                    float f_post_prev = f_post; // Fallback
+                    if (prev_x >= 0 && prev_x < NX && prev_y >= 0 && prev_y < NY && prev_z >= 0 && prev_z < NZ) {
+                        if (sdf[getScalarIndex(prev_x, prev_y, prev_z)] > -0.5) {
+                            f_post_prev = f[getIndex(prev_x, prev_y, prev_z, q)]; // Use pre-collision f as approximation for stability
+                        }
+                    }
+                    
+                    float bounced = 0.0;
+                    if (q_dist >= 0.5) {
+                        bounced = ((2.0 * q_dist - 1.0) / (2.0 * q_dist)) * f_post + (1.0 / (2.0 * q_dist)) * f_post_prev;
+                    } else {
+                        bounced = (2.0 * q_dist) * f_post + (1.0 - 2.0 * q_dist) * f_post_prev;
+                    }
+                    f_new[getIndex(x, y, z, opposite[q])] = bounced;
+                }
+            } else {
+                f_new[getIndex(x, y, z, opposite[q])] = f_post;
+            }
+        }
+    } else {
+        rho[s_idx] = 1.0;
+        u[s_idx] = vec4(0.0);
+    }
+}
