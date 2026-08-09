@@ -54,3 +54,6 @@ You Can Download For Windows From The Releases Page. As This Depends On VTK, You
 ## NOTE
 There might be some issues with the code. as i am working solo and managing my studies, i simply havent had the time and motivation to fix them all as i have been getting burned out by this project. i would appreciate your support and reviews so that i may get the motivation to push it to great heights!!!! :3
 
+## Known Issues
+
+Hey! Due To A Recent Test, I Have Figured Out An Issue That Occurs When Running This On A VM. Basically, As i use the library vtk, it needs OpenGL 3.2+. But most VMs don't have that as they don't pass through a physical GPU causing fallback to the basic drivers. You might notice that it still does the computations but doesnt render. Now, I could fix this in the near future, but it will be tricky to make it as fast as the current one as running it inside the VM will make it very slow. I appreciate your patience with my project and I hope you can give me more feedback on how to improve it. Thank you!
