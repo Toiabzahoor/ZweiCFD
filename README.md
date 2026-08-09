@@ -43,7 +43,10 @@ cd build
 cmake ..
 cmake --build .
 ```
-
+Or, you can just use
+```bash
+./build.bat
+```
 ## Downloads
 
 You Can Download For Windows From The Releases Page. As This Depends On VTK, You Will Not be Able To Run the Exe Standalone So I Have Zipped the Necessary DLLs With The EXE So It Will Run Properly!
