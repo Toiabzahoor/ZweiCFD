@@ -61,17 +61,10 @@ if(MINGW OR WIN32)
     target_link_options(ZweiCFD PRIVATE -fopenmp -static -static-libgcc -static-libstdc++)
 endif()
 
-add_executable(ExtractProfile extract_profile.cpp)
-target_include_directories(ExtractProfile PRIVATE ${VTK_INCLUDE_DIRS})
-target_link_libraries(ExtractProfile PRIVATE ${VTK_LIBRARIES})
 
 
-add_custom_command(TARGET ZweiCFD POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${CMAKE_CURRENT_SOURCE_DIR}/naca0012.dat"
-    $<TARGET_FILE_DIR:ZweiCFD>
-    VERBATIM
-)
+
+
 
 add_custom_command(TARGET ZweiCFD POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -91,7 +84,7 @@ add_custom_command(TARGET ZweiCFD POST_BUILD
 find_program(WINDEPLOYQT_EXECUTABLE windeployqt)
 if(WINDEPLOYQT_EXECUTABLE)
     add_custom_command(TARGET ZweiCFD POST_BUILD
-        COMMAND "${WINDEPLOYQT_EXECUTABLE}" "$<TARGET_FILE:ZweiCFD>"
+        COMMAND "${WINDEPLOYQT_EXECUTABLE}" --compiler-runtime "$<TARGET_FILE:ZweiCFD>"
         COMMENT "Running windeployqt to copy Qt dependencies..."
     )
 endif()
