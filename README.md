@@ -3,8 +3,6 @@
 ZweiCFD is an interactive and fun Computational Fluid Dynamics (CFD) solver and visualization tool built using C++, Qt6, and VTK. It is designed to run real-time aerodynamics simulations while providing a highly interactive graphical user interface for dynamically tweaking simulation parameters.
 
 
-## NOTE
-There might be some issues with the code. as i am working solo and managing my studies, i simply havent had the time and motivation to fix them all as i have been getting burned out by this project. i would appreciate your support and reviews so that i may get the motivation to push it to great heights!!!! :3
 
 ## Core Features
 
@@ -49,3 +47,7 @@ cmake --build .
 ## Downloads
 
 You Can Download For Windows From The Releases Page. As This Depends On VTK, You Will Not be Able To Run the Exe Standalone So I Have Zipped the Necessary DLLs With The EXE So It Will Run Properly!
+
+## NOTE
+There might be some issues with the code. as i am working solo and managing my studies, i simply havent had the time and motivation to fix them all as i have been getting burned out by this project. i would appreciate your support and reviews so that i may get the motivation to push it to great heights!!!! :3
+
