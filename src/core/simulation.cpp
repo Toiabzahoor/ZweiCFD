@@ -10,6 +10,7 @@ VTK_MODULE_INIT(vtkInteractionStyle);
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <random>
 #include <omp.h>
 
 #include <vtkImageSlice.h>
@@ -21,6 +22,9 @@ VTK_MODULE_INIT(vtkInteractionStyle);
 #include <vtkSphereSource.h>
 #include <vtkCubeSource.h>
 #include <vtkConeSource.h>
+#include <vtkCylinderSource.h>
+#include <vtkTransform.h>
+#include <vtkTransformPolyDataFilter.h>
 #include <vtkIntArray.h>
 #include <vtkSmartPointer.h>
 #include <vtkSphereSource.h>
@@ -169,7 +173,10 @@ void Simulation::rebuildSolverWithRotation() {
     cowWidth = std::max(0.1, maxX - minX);
     cowHeight = std::max(0.1, maxY - minY);
     
-    float lbmScale = 32.0f; 
+    float scaleByWidth = 0.35f * config.lbmGridNX / (float)cowWidth;
+    float scaleByHeight = 0.45f * config.lbmGridNY / (float)cowHeight;
+    float lbmScale = std::min(scaleByWidth, scaleByHeight);
+    lbmScale = std::max(8.0f, std::min(lbmScale, 64.0f));
     cachedLbmScale = lbmScale;
     
     std::cout << "[SIM-LBM] Initializing Volumetric LBM Solver..." << std::endl;
@@ -233,7 +240,7 @@ void Simulation::rebuildSolverWithRotation() {
           double d2D = sdf2D[idx2D];
           
           double physZ = (z - grid.NZ / 2.0) / lbmScale;
-          double spanRadius = 0.5; 
+          double spanRadius = (grid.NZ / 2.0) / lbmScale; 
           double dZ = std::abs(physZ) - spanRadius;
           
           double dist3D;
@@ -328,19 +335,16 @@ void Simulation::setupVTKWithWindow(vtkRenderWindow* window) {
     float spreadY = (config.lbmGridNY / 2.0f - 1.0f) * spacing;
     float spreadZ = (config.lbmGridNZ / 2.0f - 1.0f) * spacing;
     
-    streamRake = vtkSmartPointer<vtkPlaneSource>::New();
-    streamRake->SetOrigin(inletX, -spreadY, -spreadZ);
-    streamRake->SetPoint1(inletX,  spreadY, -spreadZ);
-    streamRake->SetPoint2(inletX, -spreadY,  spreadZ);
-    streamRake->SetResolution(10, 10); 
+    streamSeeds = vtkSmartPointer<vtkPolyData>::New();
+    updateStreamlineSeeds();
 
     streamTracer = vtkSmartPointer<vtkStreamTracer>::New();
     streamTracer->SetInputData(velocityField);
-    streamTracer->SetSourceConnection(streamRake->GetOutputPort());
+    streamTracer->SetSourceData(streamSeeds);
     streamTracer->SetIntegrationStepUnit(vtkStreamTracer::CELL_LENGTH_UNIT);
-    streamTracer->SetMaximumPropagation(5000.0);
-    streamTracer->SetMaximumNumberOfSteps(5000);
-    streamTracer->SetInitialIntegrationStep(0.2);
+    streamTracer->SetMaximumPropagation(2000.0);
+    streamTracer->SetMaximumNumberOfSteps(2000);
+    streamTracer->SetInitialIntegrationStep(0.3);
     streamTracer->SetIntegrationDirectionToForward();
     
     lut = vtkSmartPointer<vtkLookupTable>::New();
@@ -378,49 +382,68 @@ void Simulation::setupVTKWithWindow(vtkRenderWindow* window) {
     heatmapSlice->SetPosition(0.0, 0.0, -0.5); 
     renderer->AddViewProp(heatmapSlice);
     
-    drawnPoints = vtkSmartPointer<vtkPoints>::New();
-    drawnPolyData = vtkSmartPointer<vtkPolyData>::New();
-    drawnPolyData->SetPoints(drawnPoints);
-    
-    vtkSmartPointer<vtkCellArray> vertices = vtkSmartPointer<vtkCellArray>::New();
-    drawnPolyData->SetVerts(vertices);
-    
-    vtkSmartPointer<vtkIntArray> shapeIndex = vtkSmartPointer<vtkIntArray>::New();
-    shapeIndex->SetName("ShapeIndex");
-    drawnPolyData->GetPointData()->AddArray(shapeIndex);
-    drawnPolyData->GetPointData()->SetActiveScalars("ShapeIndex");
-    
-    
-    vtkSmartPointer<vtkSphereSource> sphere = vtkSmartPointer<vtkSphereSource>::New();
-    sphere->SetRadius(1.0); 
-    sphere->SetPhiResolution(12);
-    sphere->SetThetaResolution(12);
-    
-    vtkSmartPointer<vtkCubeSource> cube = vtkSmartPointer<vtkCubeSource>::New();
-    cube->SetXLength(2.0); cube->SetYLength(2.0); cube->SetZLength(2.0);
-    
-    vtkSmartPointer<vtkConeSource> cone = vtkSmartPointer<vtkConeSource>::New(); 
-    cone->SetRadius(1.5); cone->SetHeight(2.0); cone->SetResolution(4); 
-    
-    drawnGlyph = vtkSmartPointer<vtkGlyph3D>::New();
-    drawnGlyph->SetInputData(drawnPolyData);
-    drawnGlyph->SetSourceConnection(0, sphere->GetOutputPort());
-    drawnGlyph->SetSourceConnection(1, cube->GetOutputPort());
-    drawnGlyph->SetSourceConnection(2, cone->GetOutputPort());
-    drawnGlyph->SetIndexModeToScalar();
-    drawnGlyph->SetRange(0, 2);
-    
-    
-    drawnGlyph->SetScaleModeToDataScalingOff(); 
-    
-    vtkSmartPointer<vtkPolyDataMapper> drawnMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
-    drawnMapper->SetInputConnection(drawnGlyph->GetOutputPort());
-    
-    drawnActor = vtkSmartPointer<vtkActor>::New();
-    drawnActor->SetMapper(drawnMapper);
-    drawnActor->GetProperty()->SetColor(0.8, 0.8, 0.8); 
-    
-    renderer->AddActor(drawnActor);
+    vtkSmartPointer<vtkCylinderSource> circleSource = vtkSmartPointer<vtkCylinderSource>::New();
+    circleSource->SetRadius(1.0);
+    circleSource->SetHeight(1.0);
+    circleSource->SetResolution(24);
+    circleSource->SetCapping(true);
+    vtkSmartPointer<vtkTransform> circleTrans = vtkSmartPointer<vtkTransform>::New();
+    circleTrans->RotateX(90);
+    vtkSmartPointer<vtkTransformPolyDataFilter> circleFilter = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+    circleFilter->SetTransform(circleTrans);
+    circleFilter->SetInputConnection(circleSource->GetOutputPort());
+
+    vtkSmartPointer<vtkCubeSource> squareSource = vtkSmartPointer<vtkCubeSource>::New();
+    squareSource->SetXLength(2.0);
+    squareSource->SetYLength(2.0);
+    squareSource->SetZLength(1.0);
+
+    vtkSmartPointer<vtkCylinderSource> diamondSource = vtkSmartPointer<vtkCylinderSource>::New();
+    diamondSource->SetRadius(1.4142);
+    diamondSource->SetHeight(1.0);
+    diamondSource->SetResolution(4);
+    diamondSource->SetCapping(true);
+    vtkSmartPointer<vtkTransform> diamondTrans = vtkSmartPointer<vtkTransform>::New();
+    diamondTrans->RotateX(90);
+    diamondTrans->RotateZ(45);
+    vtkSmartPointer<vtkTransformPolyDataFilter> diamondFilter = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+    diamondFilter->SetTransform(diamondTrans);
+    diamondFilter->SetInputConnection(diamondSource->GetOutputPort());
+
+    for (int s = 0; s < 3; ++s) {
+        drawnPoints[s] = vtkSmartPointer<vtkPoints>::New();
+        drawnPolyData[s] = vtkSmartPointer<vtkPolyData>::New();
+        drawnPolyData[s]->SetPoints(drawnPoints[s]);
+
+        vtkSmartPointer<vtkCellArray> vertices = vtkSmartPointer<vtkCellArray>::New();
+        drawnPolyData[s]->SetVerts(vertices);
+
+        drawnScaleArray[s] = vtkSmartPointer<vtkFloatArray>::New();
+        drawnScaleArray[s]->SetName("ScaleArray");
+        drawnPolyData[s]->GetPointData()->AddArray(drawnScaleArray[s]);
+        drawnPolyData[s]->GetPointData()->SetActiveScalars("ScaleArray");
+
+        drawnGlyph[s] = vtkSmartPointer<vtkGlyph3D>::New();
+        drawnGlyph[s]->SetInputData(drawnPolyData[s]);
+        if (s == 0) {
+            drawnGlyph[s]->SetSourceConnection(circleFilter->GetOutputPort());
+        } else if (s == 1) {
+            drawnGlyph[s]->SetSourceConnection(squareSource->GetOutputPort());
+        } else {
+            drawnGlyph[s]->SetSourceConnection(diamondFilter->GetOutputPort());
+        }
+        drawnGlyph[s]->SetScaleModeToScaleByScalar();
+        drawnGlyph[s]->SetScaleFactor(1.0);
+
+        vtkSmartPointer<vtkPolyDataMapper> drawnMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+        drawnMapper->SetInputConnection(drawnGlyph[s]->GetOutputPort());
+        drawnMapper->ScalarVisibilityOff();
+
+        drawnActor[s] = vtkSmartPointer<vtkActor>::New();
+        drawnActor[s]->SetMapper(drawnMapper);
+        drawnActor[s]->GetProperty()->SetColor(0.8, 0.8, 0.8);
+        renderer->AddActor(drawnActor[s]);
+    }
     
     renderer->SetBackground(0.05, 0.05, 0.1);
     renderer->SetBackground2(0.15, 0.15, 0.2);
@@ -450,7 +473,7 @@ void Simulation::updateVTKGeometry() {
         vtkSmartPointer<vtkPolygon> polygon = vtkSmartPointer<vtkPolygon>::New();
         
         float renderScale = 40.0f;
-        float physicalSpan = 1.0f;
+        float physicalSpan = (float)config.lbmGridNZ / cachedLbmScale;
         float zStart = -0.5f * physicalSpan * renderScale;
         float offsetX = -0.15f; 
         
@@ -501,11 +524,12 @@ void Simulation::stepSimulation() {
             if (totalLbmSteps % vtkUpdateFrequency == 0 || needsVTKUpdate) {
                 const auto& grid = lbmSolver->getGrid();
                 
-                float* vtkData = velocityArray->WritePointer(0, grid.NX * grid.NY * grid.NZ * 3);
-                float* speedData = speedArray->WritePointer(0, grid.NX * grid.NY * grid.NZ);
+                int totalCells = grid.NX * grid.NY * grid.NZ;
+                float* vtkData = velocityArray->WritePointer(0, totalCells * 3);
+                float* speedData = speedArray->WritePointer(0, totalCells);
                 
-                #pragma omp parallel for
-                for(int i = 0; i < grid.NX * grid.NY * grid.NZ; ++i) {
+                #pragma omp parallel for schedule(static)
+                for(int i = 0; i < totalCells; ++i) {
                     float vx = grid.u[i].x;
                     float vy = grid.u[i].y;
                     float vz = grid.u[i].z;
@@ -514,7 +538,7 @@ void Simulation::stepSimulation() {
                     vtkData[i*3 + 1] = vy;
                     vtkData[i*3 + 2] = vz;
                     
-                    speedData[i] = std::sqrt(vx*vx + vy*vy + vz*vz);
+                    speedData[i] = sqrtf(vx*vx + vy*vy + vz*vz);
                 }
                 
                 speedArray->Modified();
@@ -529,41 +553,125 @@ void Simulation::stepSimulation() {
         if (heatmapSlice) {
             heatmapSlice->SetVisibility(showHeatmap);
         }
-        if (drawnActor) {
-            drawnPolyData->Modified();
-            drawnActor->SetVisibility(true);
+        for (int s = 0; s < 3; ++s) {
+            if (drawnActor[s]) {
+                drawnActor[s]->SetVisibility(true);
+            }
         }
     }
 }
 
 void Simulation::setStreamlineDensity(int resolution) {
-    if (streamRake) {
-        int r = std::max(2, (int)std::sqrt(resolution));
-        streamRake->SetResolution(r, r);
-        streamRake->Modified();
-    }
+    streamlineDensity = resolution;
+    updateStreamlineSeeds();
 }
 
 void Simulation::setRakePosition(float relY) {
-    if (streamRake) {
-        float renderScale = 40.0f;
-        float spacing = renderScale / cachedLbmScale;
-        float inletX = (-config.lbmGridNX / 2.0f + 2.0f) * spacing;
-        float spreadY = (config.lbmGridNY / 2.0f - 1.0f) * spacing;
-        float spreadZ = (config.lbmGridNZ / 2.0f - 1.0f) * spacing;
-        
-        
-        float tightSpread = spreadY * 0.4f; 
-        
-        
-        float maxCenter = spreadY - tightSpread;
-        float center = relY * maxCenter;
-        
-        streamRake->SetOrigin(inletX, center - tightSpread, -spreadZ);
-        streamRake->SetPoint1(inletX, center + tightSpread, -spreadZ);
-        streamRake->SetPoint2(inletX, center - tightSpread,  spreadZ);
-        streamRake->Modified();
+    rakeRelY = relY;
+    updateStreamlineSeeds();
+}
+
+void Simulation::updateStreamlineSeeds() {
+    // added Poisson-Disk sampling so lines wont travel very close, causing performance gains 
+    if (!streamSeeds) return;
+
+    float renderScale = 40.0f;
+    float spacing = renderScale / cachedLbmScale;
+    float inletX = (-config.lbmGridNX / 2.0f + 2.0f) * spacing;
+    float spreadY = (config.lbmGridNY / 2.0f - 1.0f) * spacing;
+    float spreadZ = (config.lbmGridNZ / 2.0f - 1.0f) * spacing;
+    
+    float tightSpread = spreadY * 0.4f; 
+    float maxCenter = spreadY - tightSpread;
+    float center = rakeRelY * maxCenter;
+
+    int targetN = std::max(5, streamlineDensity);
+    float r_min = std::sqrt(1.0f / (targetN * 1.3f));
+    float cellSize = r_min / 1.41421356f;
+    int gridW = std::max(1, (int)std::ceil(1.0f / cellSize));
+    int gridH = std::max(1, (int)std::ceil(1.0f / cellSize));
+
+    std::vector<int> grid(gridW * gridH, -1);
+    std::vector<std::pair<float, float>> samplePoints;
+    std::vector<int> activeList;
+
+    std::mt19937 rng(1337);
+    std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
+
+    samplePoints.push_back({0.5f, 0.5f});
+    activeList.push_back(0);
+    int initGx = std::min(gridW - 1, (int)(0.5f / cellSize));
+    int initGy = std::min(gridH - 1, (int)(0.5f / cellSize));
+    grid[initGy * gridW + initGx] = 0;
+
+    while (!activeList.empty() && (int)samplePoints.size() < targetN) {
+        int randIdx = (int)(dist01(rng) * activeList.size());
+        int pointIdx = activeList[randIdx];
+        auto [px, py] = samplePoints[pointIdx];
+        bool found = false;
+
+        for (int attempt = 0; attempt < 30; ++attempt) {
+            float angle = dist01(rng) * 6.2831853f;
+            float radius = r_min * (1.0f + dist01(rng));
+            float cx = px + radius * std::cos(angle);
+            float cy = py + radius * std::sin(angle);
+
+            if (cx < 0.0f || cx > 1.0f || cy < 0.0f || cy > 1.0f) continue;
+
+            int cgx = (int)(cx / cellSize);
+            int cgy = (int)(cy / cellSize);
+            bool valid = true;
+
+            for (int dy = -2; dy <= 2 && valid; ++dy) {
+                for (int dx = -2; dx <= 2 && valid; ++dx) {
+                    int nx = cgx + dx;
+                    int ny = cgy + dy;
+                    if (nx >= 0 && nx < gridW && ny >= 0 && ny < gridH) {
+                        int neighborIdx = grid[ny * gridW + nx];
+                        if (neighborIdx != -1) {
+                            float diffX = cx - samplePoints[neighborIdx].first;
+                            float diffY = cy - samplePoints[neighborIdx].second;
+                            if (diffX * diffX + diffY * diffY < r_min * r_min) {
+                                valid = false;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (valid) {
+                int newIdx = (int)samplePoints.size();
+                samplePoints.push_back({cx, cy});
+                activeList.push_back(newIdx);
+                grid[cgy * gridW + cgx] = newIdx;
+                found = true;
+                if ((int)samplePoints.size() >= targetN) break;
+            }
+        }
+
+        if (!found) {
+            activeList[randIdx] = activeList.back();
+            activeList.pop_back();
+        }
     }
+
+    vtkSmartPointer<vtkPoints> pts = vtkSmartPointer<vtkPoints>::New();
+    pts->SetNumberOfPoints((vtkIdType)samplePoints.size());
+
+    for (size_t i = 0; i < samplePoints.size(); ++i) {
+        float u = samplePoints[i].first;
+        float v = samplePoints[i].second;
+
+        float uNorm = 2.0f * (u - 0.5f);
+        float uWarped = 0.5f + 0.5f * (0.7f * uNorm + 0.3f * uNorm * uNorm * uNorm);
+
+        float y = (center - tightSpread) + uWarped * (2.0f * tightSpread);
+        float z = -spreadZ + v * (2.0f * spreadZ);
+        pts->SetPoint((vtkIdType)i, inletX, y, z);
+    }
+
+    streamSeeds->SetPoints(pts);
+    streamSeeds->Modified();
 }
 
 void Simulation::resetFlow() {
@@ -659,7 +767,7 @@ void Simulation::fastUpdateRotation(double alpha) {
           int idx2D = y * grid.NX + x;
           double d2D = sdf2D[idx2D];
           double physZ = (z - grid.NZ / 2.0) / cachedLbmScale;
-          double spanRadius = 0.5;
+          double spanRadius = (grid.NZ / 2.0) / cachedLbmScale;
           double dZ = std::abs(physZ) - spanRadius;
           double dist3D = (d2D > 0.0 && dZ > 0.0) ? std::sqrt(d2D*d2D + dZ*dZ) : std::max(d2D, dZ);
           
@@ -692,74 +800,70 @@ void Simulation::fastUpdateRotation(double alpha) {
 void Simulation::clearDrawing() {
     if (!lbmSolver) return;
     
-    
-    drawnPoints->Initialize();
-    drawnPolyData->GetVerts()->Initialize();
-    if (auto arr = drawnPolyData->GetPointData()->GetArray("ShapeIndex")) {
-        arr->Initialize();
+    for (int s = 0; s < 3; ++s) {
+        if (drawnPoints[s]) drawnPoints[s]->Initialize();
+        if (drawnPolyData[s]) {
+            if (drawnPolyData[s]->GetVerts()) drawnPolyData[s]->GetVerts()->Initialize();
+            if (drawnScaleArray[s]) drawnScaleArray[s]->Initialize();
+            drawnPolyData[s]->Modified();
+        }
     }
-    drawnPolyData->Modified();
-    
     
     auto &grid = lbmSolver->getGridModifiable();
     std::fill(grid.drawn_sdf.begin(), grid.drawn_sdf.end(), 1.0f);
-    
     
     rebuildSolverWithRotation();
 }
 
 void Simulation::addDrawnObstacle(float pX, float pY, float radius) {
-    
     if (!lbmSolver) return;
     
-    
     float renderScale = 40.0f;
-    vtkIdType pid = drawnPoints->InsertNextPoint(pX, pY, 0.0);
-    drawnPolyData->GetVerts()->InsertNextCell(1, &pid);
-    
-    if (auto arr = vtkIntArray::SafeDownCast(drawnPolyData->GetPointData()->GetArray("ShapeIndex"))) {
-        arr->InsertNextValue(brushShape);
-    }
-    
-    
-    
-    
-    
-    if (!drawnPolyData->GetPointData()->GetArray("ScaleArray")) {
-        vtkSmartPointer<vtkFloatArray> scaleArray = vtkSmartPointer<vtkFloatArray>::New();
-        scaleArray->SetName("ScaleArray");
-        drawnPolyData->GetPointData()->AddArray(scaleArray);
-        drawnGlyph->SetScaleModeToScaleByScalar();
-        drawnGlyph->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_POINTS, "ScaleArray");
-    }
-    if (auto sArr = vtkFloatArray::SafeDownCast(drawnPolyData->GetPointData()->GetArray("ScaleArray"))) {
-        sArr->InsertNextValue(radius);
-    }
-    
-    drawnPoints->Modified();
-    drawnPolyData->GetVerts()->Modified();
-    drawnPolyData->Modified();
-    
-    
-    auto &grid = lbmSolver->getGridModifiable();
     float offsetX = -0.15f; 
-    
     float physX = pX / renderScale;
     float physY = pY / renderScale;
-    
+    auto &grid = lbmSolver->getGridModifiable();
     int cx = (physX + offsetX) * cachedLbmScale + grid.NX / 2.0;
     int cy = physY * cachedLbmScale + grid.NY / 2.0;
     int radCells = radius * cachedLbmScale / renderScale;
+    
+    if (isEraser) {
+        for (int z = 0; z < grid.NZ; ++z) {
+            for (int y = std::max(0, cy - radCells); y <= std::min(grid.NY-1, cy + radCells); ++y) {
+                for (int x = std::max(0, cx - radCells); x <= std::min(grid.NX-1, cx + radCells); ++x) {
+                    float dist = std::sqrt((x-cx)*(x-cx) + (y-cy)*(y-cy));
+                    if (dist <= radCells) {
+                        int s_idx = grid.getScalarIndex(x, y, z);
+                        grid.drawn_sdf[s_idx] = 1.0f;
+                    }
+                }
+            }
+        }
+        rebuildSolverWithRotation();
+        return;
+    }
+    
+    int shape = std::clamp(brushShape, 0, 2);
+    if (drawnPoints[shape] && drawnPolyData[shape]) {
+        vtkIdType pid = drawnPoints[shape]->InsertNextPoint(pX, pY, 0.0);
+        drawnPolyData[shape]->GetVerts()->InsertNextCell(1, &pid);
+        if (drawnScaleArray[shape]) {
+            drawnScaleArray[shape]->InsertNextValue(radius);
+        }
+        drawnPoints[shape]->Modified();
+        drawnPolyData[shape]->GetVerts()->Modified();
+        drawnPolyData[shape]->Modified();
+    }
     
     for (int z = 0; z < grid.NZ; ++z) {
         for (int y = std::max(0, cy - radCells); y <= std::min(grid.NY-1, cy + radCells); ++y) {
             for (int x = std::max(0, cx - radCells); x <= std::min(grid.NX-1, cx + radCells); ++x) {
                 float dist = 0.0f;
-                if (brushShape == 0) { 
+                if (shape == 0) { 
                     dist = std::sqrt((x-cx)*(x-cx) + (y-cy)*(y-cy));
-                } else if (brushShape == 1) { 
+                } else if (shape == 1) { 
                     dist = std::max(std::abs(x-cx), std::abs(y-cy));
-                } else if (brushShape == 2) { 
+                } else if (shape == 2) { 
                     dist = std::abs(x-cx) + std::abs(y-cy);
                 }
                 
@@ -772,6 +876,67 @@ void Simulation::addDrawnObstacle(float pX, float pY, float radius) {
         }
     }
     needsVTKUpdate = true;
+}
+
+void Simulation::panCamera(double dx, double dy) {
+    if (!renderer) return;
+    vtkCamera* cam = renderer->GetActiveCamera();
+    if (!cam) return;
+    double pos[3], fp[3];
+    cam->GetPosition(pos);
+    cam->GetFocalPoint(fp);
+    pos[0] += dx;
+    pos[1] += dy;
+    fp[0] += dx;
+    fp[1] += dy;
+    cam->SetPosition(pos);
+    cam->SetFocalPoint(fp);
+    if (renderWindow) renderWindow->Render();
+}
+
+void Simulation::rotateCamera(double dAzimuth, double dElevation) {
+    if (!renderer) return;
+    vtkCamera* cam = renderer->GetActiveCamera();
+    if (!cam) return;
+    cam->Azimuth(dAzimuth);
+    cam->Elevation(dElevation);
+    cam->OrthogonalizeViewUp();
+    renderer->ResetCameraClippingRange();
+    if (renderWindow) renderWindow->Render();
+}
+
+void Simulation::zoomCamera(double factor) {
+    if (!renderer) return;
+    vtkCamera* cam = renderer->GetActiveCamera();
+    if (!cam) return;
+    cam->Dolly(factor);
+    renderer->ResetCameraClippingRange();
+    if (renderWindow) renderWindow->Render();
+}
+
+void Simulation::resetCameraView() {
+    if (!renderer) return;
+    vtkCamera* cam = renderer->GetActiveCamera();
+    if (!cam) return;
+    cam->SetFocalPoint(0.0, 0.0, 0.0);
+    cam->SetPosition(0.0, 0.0, 1.0);
+    cam->SetViewUp(0.0, 1.0, 0.0);
+    renderer->ResetCamera();
+    if (renderWindow) renderWindow->Render();
+}
+
+void Simulation::setLineWidth(float width) {
+    if (streamActor) {
+        streamActor->GetProperty()->SetLineWidth(std::max(1.0f, width));
+        if (renderWindow) renderWindow->Render();
+    }
+}
+
+float Simulation::getLineWidth() const {
+    if (streamActor) {
+        return streamActor->GetProperty()->GetLineWidth();
+    }
+    return 2.0f;
 }
 
 } 

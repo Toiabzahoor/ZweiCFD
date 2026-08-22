@@ -53,6 +53,12 @@ public:
   void setVisualRotation(double angleDeg);
   void addDrawnObstacle(float x, float y, float radius);
   void clearDrawing();
+  void panCamera(double dx, double dy);
+  void rotateCamera(double dAzimuth, double dElevation);
+  void zoomCamera(double factor);
+  void resetCameraView();
+  void setLineWidth(float width);
+  float getLineWidth() const;
   
   vtkRenderWindow* getRenderWindow() const { return renderWindow; }
 
@@ -71,18 +77,21 @@ public:
   float cowHeight = 1.0f;
   
   
-  int stepsPerFrame = 2;
-  int vtkUpdateFrequency = 5;
+  int stepsPerFrame = 1;
+  int vtkUpdateFrequency = 1;
   int totalLbmSteps = 0;
   
   bool showParticles = true;
   bool showHeatmap = false;
   bool drawMode = false;
+  bool isEraser = false;
   float brushSize = 3.0f;
   int brushShape = 0; 
   bool flapping = false;
   double flapTimer = 0.0;
   
+  void updateStreamlineSeeds();
+
   zweicfd::Coefficients results;
 
 private:
@@ -95,17 +104,20 @@ private:
   vtkSmartPointer<vtkImageData> velocityField;
   vtkSmartPointer<vtkFloatArray> velocityArray;
   vtkSmartPointer<vtkFloatArray> speedArray;
-  vtkSmartPointer<vtkPlaneSource> streamRake;
+  vtkSmartPointer<vtkPolyData> streamSeeds;
+  float rakeRelY = 0.0f;
+  int streamlineDensity = 100;
   vtkSmartPointer<vtkStreamTracer> streamTracer;
   vtkSmartPointer<vtkActor> streamActor;
   
   vtkSmartPointer<vtkImageSliceMapper> heatmapMapper;
   vtkSmartPointer<vtkImageSlice> heatmapSlice;
   
-  vtkSmartPointer<vtkPoints> drawnPoints;
-  vtkSmartPointer<vtkPolyData> drawnPolyData;
-  vtkSmartPointer<vtkActor> drawnActor;
-  vtkSmartPointer<vtkGlyph3D> drawnGlyph;
+  vtkSmartPointer<vtkPoints> drawnPoints[3];
+  vtkSmartPointer<vtkPolyData> drawnPolyData[3];
+  vtkSmartPointer<vtkFloatArray> drawnScaleArray[3];
+  vtkSmartPointer<vtkActor> drawnActor[3];
+  vtkSmartPointer<vtkGlyph3D> drawnGlyph[3];
   
   vtkSmartPointer<vtkLookupTable> lut;
   int frameCounter = 0;

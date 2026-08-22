@@ -26,3 +26,4 @@ output.txt
 imgui.ini
 lbm_dump_*.txt
 .agents/
+AGENTS.md

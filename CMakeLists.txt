@@ -38,6 +38,8 @@ add_executable(ZweiCFD
     src/core/config.cpp
     src/ui/main_window.cpp
     include/ZweiCFD/ui/main_window.hpp
+    src/ui/controls_dialog.cpp
+    include/ZweiCFD/ui/controls_dialog.hpp
 )
 FetchContent_Declare(
     eigen
