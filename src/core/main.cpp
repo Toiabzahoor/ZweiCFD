@@ -4,10 +4,19 @@
 #include <QVTKOpenGLNativeWidget.h>
 #include <QMessageBox>
 #include <QDebug>
+#include <vtkAutoInit.h>
+
+VTK_MODULE_INIT(vtkRenderingOpenGL2);
+VTK_MODULE_INIT(vtkInteractionStyle);
+VTK_MODULE_INIT(vtkRenderingVolumeOpenGL2);
 
 int main(int argc, char* argv[]) {
 
-    QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
+    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+    QSurfaceFormat format = QVTKOpenGLNativeWidget::defaultFormat();
+    format.setVersion(4, 3);
+    format.setProfile(QSurfaceFormat::CoreProfile);
+    QSurfaceFormat::setDefaultFormat(format);
 
     QApplication app(argc, argv);
 

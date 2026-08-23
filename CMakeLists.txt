@@ -9,7 +9,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 COMPONENTS Widgets REQUIRED)
+find_package(Qt6 COMPONENTS Widgets OpenGL REQUIRED)
 
 include(FetchContent)
 
@@ -19,13 +19,18 @@ include_directories(include)
 find_package(VTK REQUIRED COMPONENTS
     CommonCore
     CommonDataModel
+    CommonTransforms
     RenderingCore
     RenderingOpenGL2
     InteractionStyle
     GUISupportQt
+    FiltersCore
+    FiltersGeneral
     FiltersModeling
     FiltersFlowPaths
     IOGeometry
+    RenderingVolume
+    RenderingVolumeOpenGL2
 )
 
 add_executable(ZweiCFD
@@ -36,6 +41,8 @@ add_executable(ZweiCFD
     src/solver/inviscid_lvpm.cpp
     src/solver/lbm_solver.cpp
     src/core/config.cpp
+    src/render/gpu_advection.cpp
+    include/ZweiCFD/render/gpu_advection.hpp
     src/ui/main_window.cpp
     include/ZweiCFD/ui/main_window.hpp
     src/ui/controls_dialog.cpp
@@ -51,22 +58,18 @@ if(NOT eigen_POPULATED)
     FetchContent_Populate(eigen)
 endif()
 
+find_package(OpenMP REQUIRED)
+
 target_include_directories(ZweiCFD PRIVATE
     ${eigen_SOURCE_DIR}
     ${VTK_INCLUDE_DIRS}
 )
 
-target_compile_options(ZweiCFD PRIVATE -fopenmp)
-target_link_libraries(ZweiCFD PRIVATE ${VTK_LIBRARIES} Qt6::Widgets)
+target_link_libraries(ZweiCFD PRIVATE ${VTK_LIBRARIES} Qt6::Widgets Qt6::OpenGL OpenMP::OpenMP_CXX)
 
-if(MINGW OR WIN32)
-    target_link_options(ZweiCFD PRIVATE -fopenmp -static -static-libgcc -static-libstdc++)
+if(MINGW)
+    target_link_options(ZweiCFD PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
-
-
-
-
-
 
 add_custom_command(TARGET ZweiCFD POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -75,18 +78,20 @@ add_custom_command(TARGET ZweiCFD POST_BUILD
     VERBATIM
 )
 
-# Copy all required DLL dependencies to the build output directory
-add_custom_command(TARGET ZweiCFD POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:ZweiCFD> $<TARGET_FILE_DIR:ZweiCFD>
-    COMMAND_EXPAND_LISTS
-    VERBATIM
-)
-
-# Run windeployqt to bundle Qt plugins and dependencies
-find_program(WINDEPLOYQT_EXECUTABLE windeployqt)
-if(WINDEPLOYQT_EXECUTABLE)
+if(WIN32)
+    # Copy all required DLL dependencies to the build output directory
     add_custom_command(TARGET ZweiCFD POST_BUILD
-        COMMAND "${WINDEPLOYQT_EXECUTABLE}" --compiler-runtime "$<TARGET_FILE:ZweiCFD>"
-        COMMENT "Running windeployqt to copy Qt dependencies..."
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:ZweiCFD> $<TARGET_FILE_DIR:ZweiCFD>
+        COMMAND_EXPAND_LISTS
+        VERBATIM
     )
+
+    # Run windeployqt to bundle Qt plugins and dependencies
+    find_program(WINDEPLOYQT_EXECUTABLE windeployqt)
+    if(WINDEPLOYQT_EXECUTABLE)
+        add_custom_command(TARGET ZweiCFD POST_BUILD
+            COMMAND "${WINDEPLOYQT_EXECUTABLE}" --compiler-runtime "$<TARGET_FILE:ZweiCFD>"
+            COMMENT "Running windeployqt to copy Qt dependencies..."
+        )
+    endif()
 endif()

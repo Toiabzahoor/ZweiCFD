@@ -1,0 +1,104 @@
+name: Multi-Platform Build & CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-linux:
+    name: Linux (Ubuntu x86_64)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            ninja-build \
+            g++ \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            libx11-dev \
+            libomp-dev \
+            qt6-base-dev \
+            libvtk9-dev
+
+      - name: Configure CMake
+        run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build ZweiCFD
+        run: cmake --build build --config Release --parallel
+
+      - name: Upload Linux Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZweiCFD-Linux-x86_64
+          path: build/ZweiCFD
+
+  build-macos:
+    name: macOS (Apple Silicon ARM64)
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Homebrew Dependencies
+        run: |
+          brew update
+          brew install cmake ninja qt@6 vtk libomp
+
+      - name: Configure CMake
+        run: |
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix vtk);$(brew --prefix libomp)"
+
+      - name: Build ZweiCFD
+        run: cmake --build build --config Release --parallel
+
+      - name: Upload macOS Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZweiCFD-macOS-ARM64
+          path: build/ZweiCFD
+
+  build-windows:
+    name: Windows (MSYS2 UCRT64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-vtk
+            mingw-w64-ucrt-x86_64-openmp
+
+      - name: Configure CMake
+        shell: msys2 {0}
+        run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build & Package ZweiCFD
+        shell: msys2 {0}
+        run: cmake --build build --config Release --parallel
+
+      - name: Upload Windows Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZweiCFD-Windows-x86_64
+          path: build/

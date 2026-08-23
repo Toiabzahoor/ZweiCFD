@@ -30,14 +30,23 @@ VTK_MODULE_INIT(vtkInteractionStyle);
 #include <vtkSphereSource.h>
 #include <vtkXMLPolyDataWriter.h>
 #include <vtkRenderWindowInteractor.h>
-#include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkCellArray.h>
 #include <vtkFloatArray.h>
 #include <vtkPointData.h>
 #include <vtkProperty.h>
 #include <vtkLookupTable.h>
+#include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkCamera.h>
-#include <vtkObjectFactory.h>
+#include <vtkIdList.h>
+#include <vtkPolyDataNormals.h>
+
+#ifdef emit
+#undef emit
+#include <vtkImplicitPolyDataDistance.h>
+#define emit
+#else
+#include <vtkImplicitPolyDataDistance.h>
+#endif
 
 namespace zweicfd {
 
@@ -162,99 +171,137 @@ void Simulation::rebuildSolverWithRotation() {
     
     lbmSolver = std::make_unique<zweicfd::LBMSolver>(config.lbmGridNX, config.lbmGridNY, config.lbmGridNZ);
     auto &grid = lbmSolver->getGridModifiable();
-    const auto &panels = rotatedFoil.getPanels();
-    double minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
-    for (const auto &panel : panels) {
-      minX = std::min({minX, panel.p1.x, panel.p2.x});
-      maxX = std::max({maxX, panel.p1.x, panel.p2.x});
-      minY = std::min({minY, panel.p1.y, panel.p2.y});
-      maxY = std::max({maxY, panel.p1.y, panel.p2.y});
-    }
-    cowWidth = std::max(0.1, maxX - minX);
-    cowHeight = std::max(0.1, maxY - minY);
-    
-    float scaleByWidth = 0.35f * config.lbmGridNX / (float)cowWidth;
-    float scaleByHeight = 0.45f * config.lbmGridNY / (float)cowHeight;
-    float lbmScale = std::min(scaleByWidth, scaleByHeight);
-    lbmScale = std::max(8.0f, std::min(lbmScale, 64.0f));
-    cachedLbmScale = lbmScale;
-    
-    std::cout << "[SIM-LBM] Initializing Volumetric LBM Solver..." << std::endl;
-    std::cout << "[SIM-LBM] Grid Size: " << config.lbmGridNX << "x" << config.lbmGridNY << "x" << config.lbmGridNZ << std::endl;
-    std::cout << "[SIM-LBM] Computed Grid Scale: " << cachedLbmScale << std::endl;
-    
-    std::vector<double> sdf2D(grid.NX * grid.NY);
-    
-#pragma omp parallel for collapse(2)
-    for (int y = 0; y < grid.NY; ++y) {
-      for (int x = 0; x < grid.NX; ++x) {
-        
-        float offsetX = -0.15f; 
-        double physX = (x - grid.NX / 2.0) / lbmScale - offsetX;
-        double physY = (y - grid.NY / 2.0) / lbmScale;
-        zweicfd::Point2D p{physX, physY};
-        bool inside = false;
-        double minDist = 1e9;
-        for (const auto &panel : panels) {
-          
-          if (((panel.p1.y > p.y) != (panel.p2.y > p.y)) &&
-              (p.x < (panel.p2.x - panel.p1.x) * (p.y - panel.p1.y) /
-                             (panel.p2.y - panel.p1.y) +
-                         panel.p1.x)) {
-            inside = !inside;
-          }
-
-          
-          double l2 = (panel.p2.x - panel.p1.x) * (panel.p2.x - panel.p1.x) +
-                      (panel.p2.y - panel.p1.y) * (panel.p2.y - panel.p1.y);
-          if (l2 == 0.0) {
-            double d = std::sqrt((p.x - panel.p1.x) * (p.x - panel.p1.x) +
-                                 (p.y - panel.p1.y) * (p.y - panel.p1.y));
-            minDist = std::min(minDist, d);
-            continue;
-          }
-
-          double t = std::max(
-              0.0,
-              std::min(1.0, ((p.x - panel.p1.x) * (panel.p2.x - panel.p1.x) +
-                             (p.y - panel.p1.y) * (panel.p2.y - panel.p1.y)) /
-                                l2));
-          double projX = panel.p1.x + t * (panel.p2.x - panel.p1.x);
-          double projY = panel.p1.y + t * (panel.p2.y - panel.p1.y);
-
-          double d = std::sqrt((p.x - projX) * (p.x - projX) +
-                               (p.y - projY) * (p.y - projY));
-          minDist = std::min(minDist, d);
-        }
-        int idx = y * grid.NX + x;
-        sdf2D[idx] = inside ? -minDist : minDist;
-      }
-    }
-
+    float lbmScale = 32.0f;
     int internalNodes = 0;
-#pragma omp parallel for collapse(3) reduction(+:internalNodes)
-    for (int z = 0; z < grid.NZ; ++z) {
+
+    if (rotatedFoil.is3D() && rotatedFoil.getMesh3D()) {
+      double bounds[6];
+      rotatedFoil.getMesh3D()->GetBounds(bounds);
+      cowWidth = std::max(0.1, bounds[1] - bounds[0]);
+      cowHeight = std::max(0.1, bounds[3] - bounds[2]);
+      
+      float scaleByWidth = 0.50f * config.lbmGridNX / (float)cowWidth;
+      float scaleByHeight = 0.60f * config.lbmGridNY / (float)cowHeight;
+      lbmScale = std::min(scaleByWidth, scaleByHeight);
+      lbmScale = std::max(16.0f, std::min(lbmScale, 48.0f));
+      cachedLbmScale = lbmScale;
+
+      auto implicitDist = vtkSmartPointer<vtkImplicitPolyDataDistance>::New();
+      implicitDist->SetInput(rotatedFoil.getMesh3D());
+      float offsetX = -0.15f;
+
+      #pragma omp parallel for collapse(3) reduction(+:internalNodes)
+      for (int z = 0; z < grid.NZ; ++z) {
+        for (int y = 0; y < grid.NY; ++y) {
+          for (int x = 0; x < grid.NX; ++x) {
+            double physX = (x - grid.NX / 2.0) / lbmScale - offsetX;
+            double physY = (y - grid.NY / 2.0) / lbmScale;
+            double physZ = (z - grid.NZ / 2.0) / lbmScale;
+            double pt[3] = {physX, physY, physZ};
+            double d = implicitDist->EvaluateFunction(pt);
+
+            int scalarIdx = grid.getScalarIndex(x, y, z);
+            float mesh_sdf = (float)(d * lbmScale);
+            grid.sdf[scalarIdx] = std::min(mesh_sdf, grid.drawn_sdf[scalarIdx]);
+
+            if (grid.sdf[scalarIdx] <= 0.0f) internalNodes++;
+          }
+        }
+      }
+    } else {
+      const auto &panels = rotatedFoil.getPanels();
+      double minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+      for (const auto &panel : panels) {
+        minX = std::min({minX, panel.p1.x, panel.p2.x});
+        maxX = std::max({maxX, panel.p1.x, panel.p2.x});
+        minY = std::min({minY, panel.p1.y, panel.p2.y});
+        maxY = std::max({maxY, panel.p1.y, panel.p2.y});
+      }
+      cowWidth = std::max(0.1, maxX - minX);
+      cowHeight = std::max(0.1, maxY - minY);
+      
+      float scaleByWidth = 0.35f * config.lbmGridNX / (float)cowWidth;
+      float scaleByHeight = 0.45f * config.lbmGridNY / (float)cowHeight;
+      lbmScale = std::min(scaleByWidth, scaleByHeight);
+      lbmScale = std::max(8.0f, std::min(lbmScale, 64.0f));
+      cachedLbmScale = lbmScale;
+      
+      std::cout << "[SIM-LBM] Initializing Volumetric LBM Solver..." << std::endl;
+      std::cout << "[SIM-LBM] Grid Size: " << config.lbmGridNX << "x" << config.lbmGridNY << "x" << config.lbmGridNZ << std::endl;
+      std::cout << "[SIM-LBM] Computed Grid Scale: " << cachedLbmScale << std::endl;
+      
+      std::vector<double> sdf2D(grid.NX * grid.NY);
+      
+  #pragma omp parallel for collapse(2)
       for (int y = 0; y < grid.NY; ++y) {
         for (int x = 0; x < grid.NX; ++x) {
-          int idx2D = y * grid.NX + x;
-          double d2D = sdf2D[idx2D];
           
-          double physZ = (z - grid.NZ / 2.0) / lbmScale;
-          double spanRadius = (grid.NZ / 2.0) / lbmScale; 
-          double dZ = std::abs(physZ) - spanRadius;
-          
-          double dist3D;
-          if (d2D > 0.0 && dZ > 0.0) {
-              dist3D = std::sqrt(d2D*d2D + dZ*dZ);
-          } else {
-              dist3D = std::max(d2D, dZ);
+          float offsetX = -0.15f; 
+          double physX = (x - grid.NX / 2.0) / lbmScale - offsetX;
+          double physY = (y - grid.NY / 2.0) / lbmScale;
+          zweicfd::Point2D p{physX, physY};
+          bool inside = false;
+          double minDist = 1e9;
+          for (const auto &panel : panels) {
+            
+            if (((panel.p1.y > p.y) != (panel.p2.y > p.y)) &&
+                (p.x < (panel.p2.x - panel.p1.x) * (p.y - panel.p1.y) /
+                               (panel.p2.y - panel.p1.y) +
+                           panel.p1.x)) {
+              inside = !inside;
+            }
+
+            
+            double l2 = (panel.p2.x - panel.p1.x) * (panel.p2.x - panel.p1.x) +
+                        (panel.p2.y - panel.p1.y) * (panel.p2.y - panel.p1.y);
+            if (l2 == 0.0) {
+              double d = std::sqrt((p.x - panel.p1.x) * (p.x - panel.p1.x) +
+                                   (p.y - panel.p1.y) * (p.y - panel.p1.y));
+              minDist = std::min(minDist, d);
+              continue;
+            }
+
+            double t = std::max(
+                0.0,
+                std::min(1.0, ((p.x - panel.p1.x) * (panel.p2.x - panel.p1.x) +
+                               (p.y - panel.p1.y) * (panel.p2.y - panel.p1.y)) /
+                                  l2));
+            double projX = panel.p1.x + t * (panel.p2.x - panel.p1.x);
+            double projY = panel.p1.y + t * (panel.p2.y - panel.p1.y);
+
+            double d = std::sqrt((p.x - projX) * (p.x - projX) +
+                                 (p.y - projY) * (p.y - projY));
+            minDist = std::min(minDist, d);
           }
-          
-          int scalarIdx = grid.getScalarIndex(x, y, z);
-          float airfoil_sdf = (float)(dist3D * lbmScale);
-          grid.sdf[scalarIdx] = std::min(airfoil_sdf, grid.drawn_sdf[scalarIdx]);
-          
-          if (grid.sdf[scalarIdx] <= 0.0f) internalNodes++;
+          int idx = y * grid.NX + x;
+          sdf2D[idx] = inside ? -minDist : minDist;
+        }
+      }
+
+  #pragma omp parallel for collapse(3) reduction(+:internalNodes)
+      for (int z = 0; z < grid.NZ; ++z) {
+        for (int y = 0; y < grid.NY; ++y) {
+          for (int x = 0; x < grid.NX; ++x) {
+            int idx2D = y * grid.NX + x;
+            double d2D = sdf2D[idx2D];
+            
+            double physZ = (z - grid.NZ / 2.0) / lbmScale;
+            double spanRadius = (grid.NZ / 2.0) / lbmScale; 
+            double dZ = std::abs(physZ) - spanRadius;
+            
+            double dist3D;
+            if (d2D > 0.0 && dZ > 0.0) {
+                dist3D = std::sqrt(d2D*d2D + dZ*dZ);
+            } else {
+                dist3D = std::max(d2D, dZ);
+            }
+            
+            int scalarIdx = grid.getScalarIndex(x, y, z);
+            float airfoil_sdf = (float)(dist3D * lbmScale);
+            grid.sdf[scalarIdx] = std::min(airfoil_sdf, grid.drawn_sdf[scalarIdx]);
+            
+            if (grid.sdf[scalarIdx] <= 0.0f) internalNodes++;
+          }
         }
       }
     }
@@ -271,6 +318,30 @@ void Simulation::rebuildSolverWithRotation() {
     totalLbmSteps = 0;
     freezeFlow = false;
     results = {0.1, 0.05, -0.02};
+    needsVTKUpdate = true;
+
+    if (velocityField) {
+        float renderScale = 40.0f;
+        float spacing = renderScale / cachedLbmScale;
+        velocityField->SetSpacing(spacing, spacing, spacing);
+        velocityField->SetOrigin(
+            (-config.lbmGridNX / 2.0f) * spacing,
+            (-config.lbmGridNY / 2.0f) * spacing,
+            (-config.lbmGridNZ / 2.0f) * spacing
+        );
+        velocityField->Modified();
+    }
+    if (gpuAdvection) {
+        float renderScale = 40.0f;
+        float spacing = renderScale / cachedLbmScale;
+        float spreadX = (config.lbmGridNX / 2.0f) * spacing;
+        float spreadY = (config.lbmGridNY / 2.0f) * spacing;
+        float spreadZ = (config.lbmGridNZ / 2.0f) * spacing;
+        float inletX = (-config.lbmGridNX / 2.0f + 2.0f) * spacing;
+        gpuAdvection->setDomainBounds(-spreadX, -spreadY, -spreadZ, spreadX, spreadY, spreadZ);
+        gpuAdvection->setInletParams(inletX, 0.0f, spreadY * 1.9f, spreadZ * 1.9f);
+    }
+    updateStreamlineSeeds();
   }
 }
 
@@ -287,6 +358,16 @@ void Simulation::setupVTKWithWindow(vtkRenderWindow* window) {
 
     updateVTKGeometry();
     
+    gpuAdvection = std::make_unique<zweicfd::GPUAdvection>();
+    float renderScale = 40.0f;
+    float spacing = renderScale / cachedLbmScale;
+    float spreadX = (config.lbmGridNX / 2.0f) * spacing;
+    float spreadY = (config.lbmGridNY / 2.0f) * spacing;
+    float spreadZ = (config.lbmGridNZ / 2.0f) * spacing;
+    float inletX = (-config.lbmGridNX / 2.0f + 2.0f) * spacing;
+    gpuAdvection->setDomainBounds(-spreadX, -spreadY, -spreadZ, spreadX, spreadY, spreadZ);
+    gpuAdvection->setInletParams(inletX, 0.0f, spreadY * 1.9f, spreadZ * 1.9f);
+    
     if (renderer) {
         vtkCamera* cam = renderer->GetActiveCamera();
         if (cam) {
@@ -300,9 +381,6 @@ void Simulation::setupVTKWithWindow(vtkRenderWindow* window) {
         }
     }
     
-    
-    float renderScale = 40.0f;
-    float spacing = renderScale / cachedLbmScale;
     
     velocityField = vtkSmartPointer<vtkImageData>::New();
     velocityField->SetDimensions(config.lbmGridNX, config.lbmGridNY, config.lbmGridNZ);
@@ -331,10 +409,6 @@ void Simulation::setupVTKWithWindow(vtkRenderWindow* window) {
     velocityField->GetPointData()->SetScalars(speedArray);
     
     
-    float inletX = (-config.lbmGridNX / 2.0f + 2.0f) * spacing;
-    float spreadY = (config.lbmGridNY / 2.0f - 1.0f) * spacing;
-    float spreadZ = (config.lbmGridNZ / 2.0f - 1.0f) * spacing;
-    
     streamSeeds = vtkSmartPointer<vtkPolyData>::New();
     updateStreamlineSeeds();
 
@@ -355,8 +429,8 @@ void Simulation::setupVTKWithWindow(vtkRenderWindow* window) {
     lut->SetTableRange(0.0, 0.15);
     lut->Build();
 
-    vtkSmartPointer<vtkPolyDataMapper> streamMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
-    streamMapper->SetInputConnection(streamTracer->GetOutputPort());
+    streamMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+    streamMapper->SetInputData(streamTracer->GetOutput());
     streamMapper->SetScalarModeToUsePointFieldData();
     streamMapper->SelectColorArray("Speed");
     streamMapper->SetScalarRange(0.0, 0.15);
@@ -364,8 +438,8 @@ void Simulation::setupVTKWithWindow(vtkRenderWindow* window) {
     
     streamActor = vtkSmartPointer<vtkActor>::New();
     streamActor->SetMapper(streamMapper);
-    streamActor->GetProperty()->SetLineWidth(2.0);
-    streamActor->GetProperty()->SetOpacity(0.9);
+    streamActor->GetProperty()->SetLineWidth(1.5);
+    streamActor->GetProperty()->SetOpacity(0.70);
     
     renderer->AddActor(streamActor);
     
@@ -373,14 +447,33 @@ void Simulation::setupVTKWithWindow(vtkRenderWindow* window) {
     heatmapMapper->SetInputData(velocityField);
     heatmapMapper->SetOrientationToZ();
     heatmapMapper->SetSliceNumber(config.lbmGridNZ / 2);
-    
+
     heatmapSlice = vtkSmartPointer<vtkImageSlice>::New();
     heatmapSlice->SetMapper(heatmapMapper);
     heatmapSlice->GetProperty()->SetLookupTable(lut);
     heatmapSlice->GetProperty()->SetUseLookupTableScalarRange(true);
     heatmapSlice->GetProperty()->SetOpacity(0.9);
-    heatmapSlice->SetPosition(0.0, 0.0, -0.5); 
+    heatmapSlice->SetPosition(0.0, 0.0, 0.0);
     renderer->AddViewProp(heatmapSlice);
+
+    rakeSource = vtkSmartPointer<vtkLineSource>::New();
+    rakeSource->SetPoint1(0, -1, 0);
+    rakeSource->SetPoint2(0, 1, 0);
+
+    rakeTube = vtkSmartPointer<vtkTubeFilter>::New();
+    rakeTube->SetInputConnection(rakeSource->GetOutputPort());
+    rakeTube->SetRadius(0.3);
+    rakeTube->SetNumberOfSides(16);
+
+    rakeMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+    rakeMapper->SetInputConnection(rakeTube->GetOutputPort());
+
+    rakeActor = vtkSmartPointer<vtkActor>::New();
+    rakeActor->SetMapper(rakeMapper);
+    rakeActor->GetProperty()->SetColor(1.0, 0.3, 0.3);
+    rakeActor->GetProperty()->SetOpacity(0.5);
+    rakeActor->SetVisibility(false);
+    renderer->AddActor(rakeActor);
     
     vtkSmartPointer<vtkCylinderSource> circleSource = vtkSmartPointer<vtkCylinderSource>::New();
     circleSource->SetRadius(1.0);
@@ -462,43 +555,73 @@ void Simulation::updateVTKGeometry() {
         
         airfoilActor = vtkSmartPointer<vtkActor>::New();
         airfoilActor->SetMapper(mapper);
-        airfoilActor->GetProperty()->SetColor(0.8, 0.8, 0.8);
+        airfoilActor->GetProperty()->SetColor(0.92, 0.94, 0.98);
+        airfoilActor->GetProperty()->SetAmbient(0.35);
+        airfoilActor->GetProperty()->SetDiffuse(0.80);
+        airfoilActor->GetProperty()->SetSpecular(0.60);
+        airfoilActor->GetProperty()->SetSpecularPower(30.0);
         
         renderer->AddActor(airfoilActor);
     }
-    
-    const auto &panels = rotatedFoil.getPanels();
-    if (!panels.empty()) {
-        vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
-        vtkSmartPointer<vtkPolygon> polygon = vtkSmartPointer<vtkPolygon>::New();
-        
-        float renderScale = 40.0f;
-        float physicalSpan = (float)config.lbmGridNZ / cachedLbmScale;
-        float zStart = -0.5f * physicalSpan * renderScale;
-        float offsetX = -0.15f; 
-        
-        polygon->GetPointIds()->SetNumberOfIds(panels.size());
-        for (size_t i = 0; i < panels.size(); ++i) {
-            points->InsertNextPoint((panels[i].p1.x + offsetX) * renderScale, panels[i].p1.y * renderScale, zStart);
-            polygon->GetPointIds()->SetId(i, i);
-        }
-        
-        vtkSmartPointer<vtkCellArray> polys = vtkSmartPointer<vtkCellArray>::New();
-        polys->InsertNextCell(polygon);
-        
-        vtkSmartPointer<vtkPolyData> tempPolyData = vtkSmartPointer<vtkPolyData>::New();
-        tempPolyData->SetPoints(points);
-        tempPolyData->SetPolys(polys);
-        
-        vtkSmartPointer<vtkLinearExtrusionFilter> extrude = vtkSmartPointer<vtkLinearExtrusionFilter>::New();
-        extrude->SetInputData(tempPolyData);
-        extrude->SetExtrusionTypeToVectorExtrusion();
-        extrude->SetVector(0, 0, 1);
-        extrude->SetScaleFactor(physicalSpan * renderScale);
-        extrude->Update();
-        
-        airfoilPolyData->ShallowCopy(extrude->GetOutput());
+    if (airfoilActor) {
+        airfoilActor->SetOrientation(0.0, 0.0, 0.0);
     }
+    
+    if (rotatedFoil.is3D() && rotatedFoil.getMesh3D()) {
+        float renderScale = 40.0f;
+        float offsetX = -0.15f;
+        auto transform = vtkSmartPointer<vtkTransform>::New();
+        transform->Scale(renderScale, renderScale, renderScale);
+        transform->Translate(offsetX, 0.0, 0.0);
+
+        auto tf = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+        tf->SetInputData(rotatedFoil.getMesh3D());
+        tf->SetTransform(transform);
+        tf->Update();
+
+        airfoilPolyData->DeepCopy(tf->GetOutput());
+    } else {
+        const auto &panels = rotatedFoil.getPanels();
+        if (!panels.empty()) {
+            vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
+            vtkSmartPointer<vtkPolygon> polygon = vtkSmartPointer<vtkPolygon>::New();
+            
+            float renderScale = 40.0f;
+            float physicalSpan = (float)config.lbmGridNZ / cachedLbmScale;
+            float zStart = -0.5f * physicalSpan * renderScale;
+            float offsetX = -0.15f; 
+            
+            polygon->GetPointIds()->SetNumberOfIds(panels.size());
+            for (size_t i = 0; i < panels.size(); ++i) {
+                points->InsertNextPoint((panels[i].p1.x + offsetX) * renderScale, panels[i].p1.y * renderScale, zStart);
+                polygon->GetPointIds()->SetId(i, i);
+            }
+            
+            vtkSmartPointer<vtkCellArray> polys = vtkSmartPointer<vtkCellArray>::New();
+            polys->InsertNextCell(polygon);
+            
+            vtkSmartPointer<vtkPolyData> tempPolyData = vtkSmartPointer<vtkPolyData>::New();
+            tempPolyData->SetPoints(points);
+            tempPolyData->SetPolys(polys);
+            
+            vtkSmartPointer<vtkLinearExtrusionFilter> extrude = vtkSmartPointer<vtkLinearExtrusionFilter>::New();
+            extrude->SetInputData(tempPolyData);
+            extrude->SetExtrusionTypeToVectorExtrusion();
+            extrude->SetVector(0, 0, 1);
+            extrude->SetScaleFactor(physicalSpan * renderScale);
+            extrude->Update();
+            
+            airfoilPolyData->ShallowCopy(extrude->GetOutput());
+        }
+    }
+    
+    auto normals = vtkSmartPointer<vtkPolyDataNormals>::New();
+    normals->SetInputData(airfoilPolyData);
+    normals->ComputePointNormalsOn();
+    normals->ComputeCellNormalsOff();
+    normals->SplittingOff();
+    normals->Update();
+    airfoilPolyData->DeepCopy(normals->GetOutput());
 }
 
 void Simulation::stepSimulation() {
@@ -544,6 +667,191 @@ void Simulation::stepSimulation() {
                 speedArray->Modified();
                 velocityArray->Modified();
                 velocityField->Modified();
+                if (volumeMapper) {
+                    volumeMapper->Modified();
+                }
+                
+                streamTracer->Update();
+                vtkSmartPointer<vtkPolyData> tracerOutput = streamTracer->GetOutput();
+                
+                {
+                    static int frameDbg = 0;
+                    if (frameDbg++ % 120 == 0) {
+                        FILE* dbgFile = fopen("filter_debug.log", "a");
+                        if (dbgFile) {
+                            fprintf(dbgFile, "[FRAME %d] showParticles=%d filterContact=%d filterPerturbed=%d pts=%lld cells=%lld\n",
+                                frameDbg, (int)showParticles, (int)filterContactLines, (int)filterUnperturbedSegments,
+                                (long long)(tracerOutput ? tracerOutput->GetNumberOfPoints() : -1),
+                                (long long)(tracerOutput ? tracerOutput->GetNumberOfCells() : -1));
+                            if (tracerOutput && tracerOutput->GetPointData()) {
+                                for (int a = 0; a < tracerOutput->GetPointData()->GetNumberOfArrays(); ++a) {
+                                    vtkDataArray* arr = tracerOutput->GetPointData()->GetArray(a);
+                                    if (arr) {
+                                        fprintf(dbgFile, "  arr[%d] name=\"%s\" comp=%d tuples=%lld\n",
+                                            a, arr->GetName() ? arr->GetName() : "NULL",
+                                            arr->GetNumberOfComponents(), (long long)arr->GetNumberOfTuples());
+                                    }
+                                }
+                            }
+                            fflush(dbgFile);
+                            fclose(dbgFile);
+                        }
+                    }
+                }
+                
+                if (filterContactLines || filterUnperturbedSegments) {
+                    static int debugCounter = 0;
+                    bool doDebug = (debugCounter++ % 60 == 0);
+                    
+                    if (doDebug && tracerOutput) {
+                        std::cout << "[FILTER-DBG] tracerOutput: pts=" << tracerOutput->GetNumberOfPoints()
+                                  << " cells=" << tracerOutput->GetNumberOfCells()
+                                  << " arrays=" << tracerOutput->GetPointData()->GetNumberOfArrays() << std::endl;
+                        for (int a = 0; a < tracerOutput->GetPointData()->GetNumberOfArrays(); ++a) {
+                            vtkDataArray* arr = tracerOutput->GetPointData()->GetArray(a);
+                            if (arr) {
+                                std::cout << "  array[" << a << "]: name=\"" << (arr->GetName() ? arr->GetName() : "NULL")
+                                          << "\" components=" << arr->GetNumberOfComponents()
+                                          << " tuples=" << arr->GetNumberOfTuples() << std::endl;
+                            }
+                        }
+                        vtkDataArray* activeVec = tracerOutput->GetPointData()->GetVectors();
+                        vtkDataArray* activeSca = tracerOutput->GetPointData()->GetScalars();
+                        std::cout << "  activeVectors=" << (activeVec ? (activeVec->GetName() ? activeVec->GetName() : "unnamed") : "NONE")
+                                  << " activeScalars=" << (activeSca ? (activeSca->GetName() ? activeSca->GetName() : "unnamed") : "NONE") << std::endl;
+                    }
+                    
+                    vtkDataArray* velArr = tracerOutput ? tracerOutput->GetPointData()->GetArray("Velocity") : nullptr;
+                    vtkDataArray* spdArr = tracerOutput ? tracerOutput->GetPointData()->GetArray("Speed") : nullptr;
+                    
+                    if (tracerOutput && tracerOutput->GetNumberOfCells() > 0 && (velArr || spdArr)) {
+                        vtkSmartPointer<vtkCellArray> filteredLines = vtkSmartPointer<vtkCellArray>::New();
+                        vtkSmartPointer<vtkIdList> ptIds = vtkSmartPointer<vtkIdList>::New();
+                        vtkIdType numCells = tracerOutput->GetNumberOfCells();
+                        int keptLines = 0;
+                        int skippedLines = 0;
+                        float globalMaxPert = 0.0f;
+                        
+                        for (vtkIdType c = 0; c < numCells; ++c) {
+                            tracerOutput->GetCellPoints(c, ptIds);
+                            vtkIdType npts = ptIds->GetNumberOfIds();
+                            if (npts < 2) continue;
+                            
+                            double v0[3] = {0.0, 0.0, 0.0};
+                            double s0 = 0.0;
+                            if (velArr) {
+                                velArr->GetTuple(ptIds->GetId(0), v0);
+                                s0 = std::sqrt(v0[0]*v0[0] + v0[1]*v0[1] + v0[2]*v0[2]);
+                            } else if (spdArr) {
+                                s0 = spdArr->GetTuple1(ptIds->GetId(0));
+                            }
+                            if (s0 < 1e-8) s0 = 0.05;
+
+                            float maxPert = 0.0f;
+                            std::vector<float> pert(npts, 0.0f);
+                            for (vtkIdType i = 0; i < npts; ++i) {
+                                vtkIdType pid = ptIds->GetId(i);
+                                float pVal = 0.0f;
+                                if (velArr) {
+                                    double v[3];
+                                    velArr->GetTuple(pid, v);
+                                    float bend = (float)(std::sqrt(v[1]*v[1] + v[2]*v[2]) / s0);
+                                    float deficit = (float)((v0[0] - v[0]) / s0);
+                                    pVal = std::max(bend, deficit > 0.0f ? deficit : 0.0f);
+                                } else if (spdArr) {
+                                    double s = spdArr->GetTuple1(pid);
+                                    pVal = (float)((s0 - s) / s0);
+                                    if (pVal < 0.0f) pVal = 0.0f;
+                                }
+                                pert[i] = pVal;
+                                if (pVal > maxPert) maxPert = pVal;
+                            }
+                            if (maxPert > globalMaxPert) globalMaxPert = maxPert;
+                            
+                            bool linePerturbed = (maxPert >= 0.015f);
+                            
+                            if (filterContactLines && !linePerturbed) {
+                                skippedLines++;
+                                continue;
+                            }
+                            
+                            if (filterUnperturbedSegments && linePerturbed) {
+                                const float segThr = 0.012f;
+                                std::vector<bool> active(npts, false);
+                                for (vtkIdType i = 0; i < npts; ++i) {
+                                    if (pert[i] >= segThr) active[i] = true;
+                                }
+                                std::vector<bool> buf = active;
+                                for (vtkIdType i = 0; i < npts; ++i) {
+                                    if (active[i]) {
+                                        for (int k = -15; k <= 30; ++k) {
+                                            vtkIdType idx = i + k;
+                                            if (idx >= 0 && idx < npts) buf[idx] = true;
+                                        }
+                                    }
+                                }
+                                vtkSmartPointer<vtkIdList> seg = vtkSmartPointer<vtkIdList>::New();
+                                for (vtkIdType i = 0; i < npts; ++i) {
+                                    if (buf[i]) {
+                                        seg->InsertNextId(ptIds->GetId(i));
+                                    } else {
+                                        if (seg->GetNumberOfIds() >= 2) {
+                                            filteredLines->InsertNextCell(seg);
+                                            keptLines++;
+                                        }
+                                        seg = vtkSmartPointer<vtkIdList>::New();
+                                    }
+                                }
+                                if (seg->GetNumberOfIds() >= 2) {
+                                    filteredLines->InsertNextCell(seg);
+                                    keptLines++;
+                                }
+                            } else if (!filterUnperturbedSegments) {
+                                filteredLines->InsertNextCell(ptIds);
+                                keptLines++;
+                            } else {
+                                filteredLines->InsertNextCell(ptIds);
+                                keptLines++;
+                            }
+                        }
+                        
+                        if (doDebug) {
+                            std::cout << "[FILTER-DBG] velArr=" << (velArr ? "YES" : "NO")
+                                      << " spdArr=" << (spdArr ? "YES" : "NO")
+                                      << " cells=" << numCells
+                                      << " kept=" << keptLines
+                                      << " skipped=" << skippedLines
+                                      << " globalMaxPert=" << globalMaxPert << std::endl;
+                        }
+                        
+                        vtkSmartPointer<vtkPolyData> filteredData = vtkSmartPointer<vtkPolyData>::New();
+                        filteredData->SetPoints(tracerOutput->GetPoints());
+                        filteredData->GetPointData()->PassData(tracerOutput->GetPointData());
+                        filteredData->SetLines(filteredLines);
+                        filteredData->Modified();
+                        
+                        streamMapper->SetInputData(filteredData);
+                    } else {
+                        if (doDebug) {
+                            std::cout << "[FILTER-DBG] FALLBACK: no valid arrays or cells, passing tracerOutput directly" << std::endl;
+                        }
+                        streamMapper->SetInputData(tracerOutput);
+                    }
+                } else {
+                    streamMapper->SetInputData(tracerOutput);
+                }
+                streamMapper->Modified();
+                
+                if (gpuAdvection) {
+                    if (!gpuAdvection->isReady()) {
+                        gpuAdvection->initialize(65536);
+                    }
+                    if (gpuAdvection->isReady()) {
+                        gpuAdvection->updateVelocityField(vtkData, config.lbmGridNX, config.lbmGridNY, config.lbmGridNZ);
+                        gpuAdvection->stepAdvection(0.02f);
+                    }
+                }
+                
                 needsVTKUpdate = false;
             }
         } else if (streamActor) {
@@ -581,9 +889,9 @@ void Simulation::updateStreamlineSeeds() {
     float spreadY = (config.lbmGridNY / 2.0f - 1.0f) * spacing;
     float spreadZ = (config.lbmGridNZ / 2.0f - 1.0f) * spacing;
     
-    float tightSpread = spreadY * 0.4f; 
-    float maxCenter = spreadY - tightSpread;
-    float center = rakeRelY * maxCenter;
+    float tightSpreadY = spreadY * 0.4f; 
+    float maxCenterY = std::max(0.0f, spreadY - tightSpreadY);
+    float centerY = rakeRelY * maxCenterY;
 
     int targetN = std::max(5, streamlineDensity);
     float r_min = std::sqrt(1.0f / (targetN * 1.3f));
@@ -665,13 +973,23 @@ void Simulation::updateStreamlineSeeds() {
         float uNorm = 2.0f * (u - 0.5f);
         float uWarped = 0.5f + 0.5f * (0.7f * uNorm + 0.3f * uNorm * uNorm * uNorm);
 
-        float y = (center - tightSpread) + uWarped * (2.0f * tightSpread);
-        float z = -spreadZ + v * (2.0f * spreadZ);
-        pts->SetPoint((vtkIdType)i, inletX, y, z);
+        float px = inletX;
+        float py = (centerY - tightSpreadY) + uWarped * (2.0f * tightSpreadY);
+        float pz = -spreadZ + v * (2.0f * spreadZ);
+        pts->SetPoint((vtkIdType)i, px, py, pz);
     }
 
     streamSeeds->SetPoints(pts);
     streamSeeds->Modified();
+
+    if (rakeSource) {
+        rakeSource->SetPoint1(inletX, centerY - tightSpreadY, -spreadZ);
+        rakeSource->SetPoint2(inletX, centerY + tightSpreadY, spreadZ);
+        rakeSource->Modified();
+    }
+    if (renderWindow) {
+        renderWindow->Render();
+    }
 }
 
 void Simulation::resetFlow() {
@@ -707,88 +1025,134 @@ void Simulation::setColormap(int type) {
     }
     lut->SetTableRange(0.0, 0.15);
     lut->Build();
+    if (heatmapSlice) {
+        heatmapSlice->GetProperty()->SetLookupTable(lut);
+    }
     
     if (renderWindow) {
         renderWindow->Render();
     }
 }
-void Simulation::setVisualRotation(double angleDeg) {
+void Simulation::setVisualRotation(double rx, double ry, double rz) {
     if (airfoilActor) {
         airfoilActor->SetOrigin(4.0, 0.0, 0.0);
-        airfoilActor->SetOrientation(0.0, 0.0, angleDeg);
+        airfoilActor->SetOrientation(rx, ry, rz);
     }
 }
 
 void Simulation::fastUpdateRotation(double alpha) {
     if (!lbmSolver) return;
+    
+    flow.alpha = alpha;
+    setVisualRotation(0.0, 0.0, -alpha);
+    
     rotatedFoil = foil;
     rotatedFoil.rotateCoordinates(-alpha);
     
     auto &grid = lbmSolver->getGridModifiable();
-    const auto &panels = rotatedFoil.getPanels();
-    
-    std::vector<double> sdf2D(grid.NX * grid.NY);
-    
-#pragma omp parallel for collapse(2)
-    for (int y = 0; y < grid.NY; ++y) {
-      for (int x = 0; x < grid.NX; ++x) {
-        float offsetX = -0.15f; 
-        double physX = (x - grid.NX / 2.0) / cachedLbmScale - offsetX;
-        double physY = (y - grid.NY / 2.0) / cachedLbmScale;
-        zweicfd::Point2D p{physX, physY};
-        bool inside = false;
-        double minDist = 1e9;
-        for (const auto &panel : panels) {
-          if (((panel.p1.y > p.y) != (panel.p2.y > p.y)) &&
-              (p.x < (panel.p2.x - panel.p1.x) * (p.y - panel.p1.y) / (panel.p2.y - panel.p1.y) + panel.p1.x)) {
-            inside = !inside;
-          }
-          double l2 = (panel.p2.x - panel.p1.x) * (panel.p2.x - panel.p1.x) + (panel.p2.y - panel.p1.y) * (panel.p2.y - panel.p1.y);
-          if (l2 == 0.0) {
-            double d = std::sqrt((p.x - panel.p1.x) * (p.x - panel.p1.x) + (p.y - panel.p1.y) * (p.y - panel.p1.y));
-            minDist = std::min(minDist, d);
-            continue;
-          }
-          double t = std::max(0.0, std::min(1.0, ((p.x - panel.p1.x) * (panel.p2.x - panel.p1.x) + (p.y - panel.p1.y) * (panel.p2.y - panel.p1.y)) / l2));
-          double projX = panel.p1.x + t * (panel.p2.x - panel.p1.x);
-          double projY = panel.p1.y + t * (panel.p2.y - panel.p1.y);
-          double d = std::sqrt((p.x - projX) * (p.x - projX) + (p.y - projY) * (p.y - projY));
-          minDist = std::min(minDist, d);
-        }
-        int idx = y * grid.NX + x;
-        sdf2D[idx] = inside ? -minDist : minDist;
-      }
-    }
 
-#pragma omp parallel for collapse(3)
-    for (int z = 0; z < grid.NZ; ++z) {
+    if (rotatedFoil.is3D() && rotatedFoil.getMesh3D()) {
+      auto implicitDist = vtkSmartPointer<vtkImplicitPolyDataDistance>::New();
+      implicitDist->SetInput(rotatedFoil.getMesh3D());
+      float offsetX = -0.15f;
+
+      #pragma omp parallel for collapse(3)
+      for (int z = 0; z < grid.NZ; ++z) {
+        for (int y = 0; y < grid.NY; ++y) {
+          for (int x = 0; x < grid.NX; ++x) {
+            double physX = (x - grid.NX / 2.0) / cachedLbmScale - offsetX;
+            double physY = (y - grid.NY / 2.0) / cachedLbmScale;
+            double physZ = (z - grid.NZ / 2.0) / cachedLbmScale;
+            double pt[3] = {physX, physY, physZ};
+            double d = implicitDist->EvaluateFunction(pt);
+
+            int scalarIdx = grid.getScalarIndex(x, y, z);
+            float mesh_sdf = (float)(d * cachedLbmScale);
+            grid.sdf[scalarIdx] = std::min(mesh_sdf, grid.drawn_sdf[scalarIdx]);
+
+            if (grid.sdf[scalarIdx] > 0.0) {
+              if (grid.rho[scalarIdx] < 0.5f) {
+                grid.rho[scalarIdx] = 1.0f;
+                grid.u[scalarIdx] = {(float)flow.V_inf, 0.0f, 0.0f, 0.0f};
+                for (int q = 0; q < 19; ++q) {
+                  float cu = zweicfd::D3Q19::cx[q] * flow.V_inf;
+                  float u2 = flow.V_inf * flow.V_inf;
+                  float feq = zweicfd::D3Q19::w[q] * (1.0f + 3.0f*cu + 4.5f*cu*cu - 1.5f*u2);
+                  int idxQ = grid.getIndex(x, y, z, q);
+                  grid.f[idxQ] = feq;
+                  grid.f_new[idxQ] = feq;
+                }
+              }
+            }
+          }
+        }
+      }
+    } else {
+      const auto &panels = rotatedFoil.getPanels();
+      
+      std::vector<double> sdf2D(grid.NX * grid.NY);
+      
+  #pragma omp parallel for collapse(2)
       for (int y = 0; y < grid.NY; ++y) {
         for (int x = 0; x < grid.NX; ++x) {
-          int idx2D = y * grid.NX + x;
-          double d2D = sdf2D[idx2D];
-          double physZ = (z - grid.NZ / 2.0) / cachedLbmScale;
-          double spanRadius = (grid.NZ / 2.0) / cachedLbmScale;
-          double dZ = std::abs(physZ) - spanRadius;
-          double dist3D = (d2D > 0.0 && dZ > 0.0) ? std::sqrt(d2D*d2D + dZ*dZ) : std::max(d2D, dZ);
-          
-          int scalarIdx = grid.getScalarIndex(x, y, z);
-          float airfoil_sdf = (float)(dist3D * cachedLbmScale);
-          grid.sdf[scalarIdx] = std::min(airfoil_sdf, grid.drawn_sdf[scalarIdx]);
-          
-          if (grid.sdf[scalarIdx] > 0.0) {
-              if (grid.rho[scalarIdx] < 0.5f) {
-                  
-                  grid.rho[scalarIdx] = 1.0f;
-                  grid.u[scalarIdx] = {(float)flow.V_inf, 0.0f, 0.0f, 0.0f};
-                  for (int q = 0; q < 19; ++q) {
-                      float cu = zweicfd::D3Q19::cx[q] * flow.V_inf;
-                      float u2 = flow.V_inf * flow.V_inf;
-                      float feq = zweicfd::D3Q19::w[q] * (1.0f + 3.0f*cu + 4.5f*cu*cu - 1.5f*u2);
-                      int idxQ = grid.getIndex(x, y, z, q);
-                      grid.f[idxQ] = feq;
-                      grid.f_new[idxQ] = feq;
-                  }
-              }
+          float offsetX = -0.15f; 
+          double physX = (x - grid.NX / 2.0) / cachedLbmScale - offsetX;
+          double physY = (y - grid.NY / 2.0) / cachedLbmScale;
+          zweicfd::Point2D p{physX, physY};
+          bool inside = false;
+          double minDist = 1e9;
+          for (const auto &panel : panels) {
+            if (((panel.p1.y > p.y) != (panel.p2.y > p.y)) &&
+                (p.x < (panel.p2.x - panel.p1.x) * (p.y - panel.p1.y) / (panel.p2.y - panel.p1.y) + panel.p1.x)) {
+              inside = !inside;
+            }
+            double l2 = (panel.p2.x - panel.p1.x) * (panel.p2.x - panel.p1.x) + (panel.p2.y - panel.p1.y) * (panel.p2.y - panel.p1.y);
+            if (l2 == 0.0) {
+              double d = std::sqrt((p.x - panel.p1.x) * (p.x - panel.p1.x) + (p.y - panel.p1.y) * (p.y - panel.p1.y));
+              minDist = std::min(minDist, d);
+              continue;
+            }
+            double t = std::max(0.0, std::min(1.0, ((p.x - panel.p1.x) * (panel.p2.x - panel.p1.x) + (p.y - panel.p1.y) * (panel.p2.y - panel.p1.y)) / l2));
+            double projX = panel.p1.x + t * (panel.p2.x - panel.p1.x);
+            double projY = panel.p1.y + t * (panel.p2.y - panel.p1.y);
+            double d = std::sqrt((p.x - projX) * (p.x - projX) + (p.y - projY) * (p.y - projY));
+            minDist = std::min(minDist, d);
+          }
+          int idx = y * grid.NX + x;
+          sdf2D[idx] = inside ? -minDist : minDist;
+        }
+      }
+
+  #pragma omp parallel for collapse(3)
+      for (int z = 0; z < grid.NZ; ++z) {
+        for (int y = 0; y < grid.NY; ++y) {
+          for (int x = 0; x < grid.NX; ++x) {
+            int idx2D = y * grid.NX + x;
+            double d2D = sdf2D[idx2D];
+            double physZ = (z - grid.NZ / 2.0) / cachedLbmScale;
+            double spanRadius = (grid.NZ / 2.0) / cachedLbmScale;
+            double dZ = std::abs(physZ) - spanRadius;
+            double dist3D = (d2D > 0.0 && dZ > 0.0) ? std::sqrt(d2D*d2D + dZ*dZ) : std::max(d2D, dZ);
+            
+            int scalarIdx = grid.getScalarIndex(x, y, z);
+            float airfoil_sdf = (float)(dist3D * cachedLbmScale);
+            grid.sdf[scalarIdx] = std::min(airfoil_sdf, grid.drawn_sdf[scalarIdx]);
+            
+            if (grid.sdf[scalarIdx] > 0.0) {
+                if (grid.rho[scalarIdx] < 0.5f) {
+                    
+                    grid.rho[scalarIdx] = 1.0f;
+                    grid.u[scalarIdx] = {(float)flow.V_inf, 0.0f, 0.0f, 0.0f};
+                    for (int q = 0; q < 19; ++q) {
+                        float cu = zweicfd::D3Q19::cx[q] * flow.V_inf;
+                        float u2 = flow.V_inf * flow.V_inf;
+                        float feq = zweicfd::D3Q19::w[q] * (1.0f + 3.0f*cu + 4.5f*cu*cu - 1.5f*u2);
+                        int idxQ = grid.getIndex(x, y, z, q);
+                        grid.f[idxQ] = feq;
+                        grid.f_new[idxQ] = feq;
+                    }
+                }
+            }
           }
         }
       }

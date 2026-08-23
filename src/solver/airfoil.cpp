@@ -5,6 +5,10 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include <algorithm>
+#include <vtkSTLReader.h>
+#include <vtkOBJReader.h>
+#include <vtkTransform.h>
+#include <vtkTransformPolyDataFilter.h>
 
 namespace zweicfd {
 
@@ -21,10 +25,7 @@ static void loadDummyDiamond(std::string& name, std::vector<Point2D>& coordinate
     };
 }
 
-bool Airfoil::loadFromFile(const std::string& raw_filename) {
-    size_t start = raw_filename.find_first_not_of(" \t\r\n");
-    std::string filename = (start == std::string::npos) ? "" : raw_filename.substr(start, raw_filename.find_last_not_of(" \t\r\n") - start + 1);
-
+bool Airfoil::loadFrom2DFile(const std::string& filename) {
     std::cout << "Loading airfoil coords from: " << filename << "...\n";
     std::ifstream file(filename);
     
@@ -65,7 +66,6 @@ bool Airfoil::loadFromFile(const std::string& raw_filename) {
         generatePanels();
         return true;
     }
-
     
     double minX = std::numeric_limits<double>::max();
     double maxX = std::numeric_limits<double>::lowest();
@@ -110,6 +110,99 @@ bool Airfoil::loadFromFile(const std::string& raw_filename) {
     return true;
 }
 
+bool Airfoil::loadFrom3DMesh(const std::string& filename) {
+    vtkSmartPointer<vtkPolyData> polyData;
+    std::string ext = "";
+    size_t dotPos = filename.find_last_of('.');
+    if (dotPos != std::string::npos) {
+        ext = filename.substr(dotPos);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    }
+
+    if (ext == ".stl") {
+        auto reader = vtkSmartPointer<vtkSTLReader>::New();
+        reader->SetFileName(filename.c_str());
+        reader->Update();
+        polyData = reader->GetOutput();
+    } else if (ext == ".obj") {
+        auto reader = vtkSmartPointer<vtkOBJReader>::New();
+        reader->SetFileName(filename.c_str());
+        reader->Update();
+        polyData = reader->GetOutput();
+    }
+
+    if (!polyData || polyData->GetNumberOfPoints() < 3) return false;
+
+    double bounds[6];
+    polyData->GetBounds(bounds);
+    double lx = bounds[1] - bounds[0];
+    double ly = bounds[3] - bounds[2];
+    double lz = bounds[5] - bounds[4];
+    double maxL = std::max(lx, std::max(ly, lz));
+    if (maxL < 1e-6) return false;
+
+    double scale = 1.0 / maxL;
+    double cx = (bounds[0] + bounds[1]) * 0.5;
+    double cy = (bounds[2] + bounds[3]) * 0.5;
+    double cz = (bounds[4] + bounds[5]) * 0.5;
+
+    auto transform = vtkSmartPointer<vtkTransform>::New();
+    transform->Scale(scale, scale, scale);
+    transform->Translate(-cx + 0.25 / scale, -cy, -cz);
+
+    auto tf = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+    tf->SetInputData(polyData);
+    tf->SetTransform(transform);
+    tf->Update();
+
+    mesh3D = tf->GetOutput();
+    originalMesh3D = vtkSmartPointer<vtkPolyData>::New();
+    originalMesh3D->DeepCopy(mesh3D);
+    is3DModel = true;
+
+    name = filename.substr(filename.find_last_of("/\\") + 1);
+    
+    coordinates.clear();
+    coordinates.push_back({0.0, -0.2});
+    coordinates.push_back({1.0, -0.2});
+    coordinates.push_back({1.0, 0.2});
+    coordinates.push_back({0.0, 0.2});
+    coordinates.push_back({0.0, -0.2});
+    generatePanels();
+
+    return true;
+}
+
+bool Airfoil::loadFromFile(const std::string& raw_filename) {
+    size_t start = raw_filename.find_first_not_of(" \t\r\n");
+    std::string filename = (start == std::string::npos) ? "" : raw_filename.substr(start, raw_filename.find_last_not_of(" \t\r\n") - start + 1);
+
+    std::cout << "Loading model from: " << filename << "...\n";
+
+    std::string ext = "";
+    size_t dotPos = filename.find_last_of('.');
+    if (dotPos != std::string::npos) {
+        ext = filename.substr(dotPos);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    }
+
+    bool success = false;
+    if (ext == ".stl" || ext == ".obj") {
+        success = loadFrom3DMesh(filename);
+    } else {
+        success = loadFrom2DFile(filename);
+    }
+
+    if (!success) {
+        std::cerr << "  Could not load '" << filename << "', using dummy airfoil instead.\n";
+        loadDummyDiamond(name, coordinates);
+        generatePanels();
+        return true;
+    }
+
+    return true;
+}
+
 void Airfoil::generatePanels() {
     panels.clear();
     if (coordinates.size() < 2) return;
@@ -121,19 +214,15 @@ void Airfoil::generatePanels() {
 
         double dx = p.p2.x - p.p1.x;
         double dy = p.p2.y - p.p1.y;
-
         
         p.cp.x = (p.p1.x + p.p2.x) / 2.0;
         p.cp.y = (p.p1.y + p.p2.y) / 2.0;
         
-        
         p.length = std::sqrt(dx * dx + dy * dy);
         p.theta = std::atan2(dy, dx);
-
         
         p.tangent.x = std::cos(p.theta);
         p.tangent.y = std::sin(p.theta);
-
         
         p.normal.x = -std::sin(p.theta);
         p.normal.y = std::cos(p.theta);
@@ -145,20 +234,43 @@ void Airfoil::generatePanels() {
 }
 
 void Airfoil::rotateCoordinates(double angleDeg) {
+    if (is3D() && mesh3D) {
+        auto transform = vtkSmartPointer<vtkTransform>::New();
+        transform->RotateZ(angleDeg);
+        auto tf = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+        tf->SetInputData(mesh3D);
+        tf->SetTransform(transform);
+        tf->Update();
+        mesh3D->DeepCopy(tf->GetOutput());
+        return;
+    }
+
     double angleRad = angleDeg * M_PI / 180.0;
     double cosA = std::cos(angleRad);
     double sinA = std::sin(angleRad);
-
     double cx = 0.25, cy = 0.0;
-
-    for (auto& pt : coordinates) {
-        double dx = pt.x - cx;
-        double dy = pt.y - cy;
-        pt.x = cx + dx * cosA - dy * sinA;
-        pt.y = cy + dx * sinA + dy * cosA;
+    for (auto& p : coordinates) {
+        double dx = p.x - cx;
+        double dy = p.y - cy;
+        p.x = cx + dx * cosA - dy * sinA;
+        p.y = cy + dx * sinA + dy * cosA;
     }
-
     generatePanels();
+}
+
+void Airfoil::setBaseRotation(double rx, double ry, double rz) {
+    if (is3D() && originalMesh3D) {
+        auto transform = vtkSmartPointer<vtkTransform>::New();
+        transform->RotateX(rx);
+        transform->RotateY(ry);
+        transform->RotateZ(rz);
+        
+        auto tf = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+        tf->SetInputData(originalMesh3D);
+        tf->SetTransform(transform);
+        tf->Update();
+        mesh3D->DeepCopy(tf->GetOutput());
+    }
 }
 
 void Airfoil::generateNACA(double m, double p, double t, int n) {
@@ -167,7 +279,6 @@ void Airfoil::generateNACA(double m, double p, double t, int n) {
     for (int i = 0; i < n; ++i) {
         double beta = M_PI * i / (n - 1);
         double x = 0.5 * (1.0 - std::cos(beta));
-        
         
         double yt = 5.0 * t * (0.2969 * std::sqrt(x) - 0.1260 * x - 0.3516 * x * x + 0.2843 * x * x * x - 0.1036 * x * x * x * x);
         
@@ -201,15 +312,12 @@ void Airfoil::generateNACA(double m, double p, double t, int n) {
         coordinates.push_back(xl[i]);
     }
     
-    
     coordinates.push_back(coordinates.front());
-
     
     int m_digit = std::round(m * 100);
     int p_digit = std::round(p * 10);
     int t_digit = std::round(t * 100);
     name = "NACA " + std::to_string(m_digit) + std::to_string(p_digit) + (t_digit < 10 ? "0" : "") + std::to_string(t_digit);
-    
     
     double area = 0.0;
     for (size_t i = 0; i < coordinates.size() - 1; ++i) {
@@ -232,4 +340,4 @@ void Airfoil::generateCylinder(double radius, int n) {
     generatePanels();
 }
 
-} 
+}

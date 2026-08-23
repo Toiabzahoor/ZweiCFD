@@ -8,6 +8,7 @@
 #include "ZweiCFD/solver/solver.hpp"
 #include "ZweiCFD/solver/lbm_solver.hpp"
 #include "ZweiCFD/core/config.hpp"
+#include "ZweiCFD/render/gpu_advection.hpp"
 
 #include <vtkSmartPointer.h>
 #include <vtkGlyph3D.h>
@@ -23,8 +24,13 @@
 #include <vtkPoints.h>
 #include <vtkFloatArray.h>
 #include <vtkImageData.h>
-#include <vtkImageSlice.h>
 #include <vtkImageSliceMapper.h>
+#include <vtkImageSlice.h>
+#include <vtkSmartVolumeMapper.h>
+#include <vtkVolumeProperty.h>
+#include <vtkVolume.h>
+#include <vtkColorTransferFunction.h>
+#include <vtkPiecewiseFunction.h>
 #include <vtkStreamTracer.h>
 #include <vtkTubeFilter.h>
 #include <vtkPointSource.h>
@@ -50,7 +56,7 @@ public:
   void setColormap(int type);
   
   void fastUpdateRotation(double alpha);
-  void setVisualRotation(double angleDeg);
+  void setVisualRotation(double rx, double ry, double rz);
   void addDrawnObstacle(float x, float y, float radius);
   void clearDrawing();
   void panCamera(double dx, double dy);
@@ -69,6 +75,7 @@ public:
 
   std::unique_ptr<zweicfd::Solver> solver;
   std::unique_ptr<zweicfd::LBMSolver> lbmSolver;
+  std::unique_ptr<zweicfd::GPUAdvection> gpuAdvection;
 
   int current_sim = 1;
   bool freezeFlow = false;
@@ -93,6 +100,9 @@ public:
   void updateStreamlineSeeds();
 
   zweicfd::Coefficients results;
+  bool filterContactLines = false;
+  bool filterUnperturbedSegments = false;
+  bool needsVTKUpdate = true;
 
 private:
   vtkSmartPointer<vtkRenderer> renderer;
@@ -107,11 +117,20 @@ private:
   vtkSmartPointer<vtkPolyData> streamSeeds;
   float rakeRelY = 0.0f;
   int streamlineDensity = 100;
-  vtkSmartPointer<vtkStreamTracer> streamTracer;
-  vtkSmartPointer<vtkActor> streamActor;
+  vtkSmartPointer<vtkLineSource> rakeSource;
+  vtkSmartPointer<vtkTubeFilter> rakeTube;
+  vtkSmartPointer<vtkPolyDataMapper> rakeMapper;
+  vtkSmartPointer<vtkActor> rakeActor;
+
+  vtkSmartPointer<vtkSmartVolumeMapper> volumeMapper;
+  vtkSmartPointer<vtkVolumeProperty> volumeProperty;
+  vtkSmartPointer<vtkVolume> volumeActor;
   
   vtkSmartPointer<vtkImageSliceMapper> heatmapMapper;
   vtkSmartPointer<vtkImageSlice> heatmapSlice;
+  vtkSmartPointer<vtkStreamTracer> streamTracer;
+  vtkSmartPointer<vtkPolyDataMapper> streamMapper;
+  vtkSmartPointer<vtkActor> streamActor;
   
   vtkSmartPointer<vtkPoints> drawnPoints[3];
   vtkSmartPointer<vtkPolyData> drawnPolyData[3];
@@ -121,7 +140,6 @@ private:
   
   vtkSmartPointer<vtkLookupTable> lut;
   int frameCounter = 0;
-  bool needsVTKUpdate = true;
 };
 
 } 

@@ -12,6 +12,7 @@
 #include <QMenu>
 #include <QFileDialog>
 #include <QAction>
+#include <QDialog>
 #include <algorithm>
 
 namespace zweicfd {
@@ -38,9 +39,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     this->setMenuBar(menuBar);
     
     QMenu* fileMenu = menuBar->addMenu("&File");
-    QAction* loadAction = fileMenu->addAction("&Load Profile...");
+    QAction* loadAction = fileMenu->addAction("&Load Model/Profile...");
     connect(loadAction, &QAction::triggered, this, [this]() {
-        QString fileName = QFileDialog::getOpenFileName(this, "Open Profile", "", "Data Files (*.dat);;All Files (*.*)");
+        QString fileName = QFileDialog::getOpenFileName(
+            this,
+            "Open Custom Model or Profile",
+            "",
+            "All Supported Formats (*.dat *.txt *.csv *.stl *.obj);;2D Airfoils (*.dat *.txt *.csv);;3D Meshes (*.stl *.obj);;All Files (*.*)"
+        );
         if (!fileName.isEmpty()) {
             if (simulation->foil.loadFromFile(fileName.toStdString())) {
                 shapeSelector->blockSignals(true);
@@ -50,6 +56,62 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                 simulation->rebuildSolverWithRotation();
                 simulation->freezeFlow = false;
                 simulation->updateVTKGeometry();
+                
+                if (simulation->foil.is3D()) {
+                    QDialog* dlg = new QDialog(this);
+                    dlg->setWindowTitle("Set Initial Model Orientation");
+                    dlg->setAttribute(Qt::WA_DeleteOnClose);
+                    dlg->setModal(false);
+                    QVBoxLayout* layout = new QVBoxLayout(dlg);
+                    
+                    QLabel* infoLabel = new QLabel("Adjust orientation so the model faces forward (left to right):");
+                    layout->addWidget(infoLabel);
+                    
+                    QSlider* pitchSlider = new QSlider(Qt::Horizontal);
+                    pitchSlider->setRange(-180, 180);
+                    QSlider* yawSlider = new QSlider(Qt::Horizontal);
+                    yawSlider->setRange(-180, 180);
+                    QSlider* rollSlider = new QSlider(Qt::Horizontal);
+                    rollSlider->setRange(-180, 180);
+                    
+                    QLabel* pLabel = new QLabel("Pitch (X): 0");
+                    QLabel* yLabel = new QLabel("Yaw (Y): 0");
+                    QLabel* rLabel = new QLabel("Roll (Z): 0");
+                    
+                    auto updateRotation = [this, pitchSlider, yawSlider, rollSlider, pLabel, yLabel, rLabel]() {
+                        pLabel->setText(QString("Pitch (X): %1").arg(pitchSlider->value()));
+                        yLabel->setText(QString("Yaw (Y): %1").arg(yawSlider->value()));
+                        rLabel->setText(QString("Roll (Z): %1").arg(rollSlider->value()));
+                        simulation->foil.setBaseRotation(pitchSlider->value(), yawSlider->value(), rollSlider->value());
+                        simulation->setVisualRotation(pitchSlider->value(), yawSlider->value(), rollSlider->value());
+                        if (auto vtkRenderWidget = qobject_cast<QVTKOpenGLNativeWidget*>(centralWidget())) {
+                            vtkRenderWidget->renderWindow()->Render();
+                        }
+                    };
+                    
+                    auto finalizeRotation = [this]() {
+                        updateMorphing();
+                    };
+                    
+                    connect(pitchSlider, &QSlider::valueChanged, dlg, updateRotation);
+                    connect(yawSlider, &QSlider::valueChanged, dlg, updateRotation);
+                    connect(rollSlider, &QSlider::valueChanged, dlg, updateRotation);
+                    
+                    connect(pitchSlider, &QSlider::sliderReleased, dlg, finalizeRotation);
+                    connect(yawSlider, &QSlider::sliderReleased, dlg, finalizeRotation);
+                    connect(rollSlider, &QSlider::sliderReleased, dlg, finalizeRotation);
+                    
+                    layout->addWidget(pLabel); layout->addWidget(pitchSlider);
+                    layout->addWidget(yLabel); layout->addWidget(yawSlider);
+                    layout->addWidget(rLabel); layout->addWidget(rollSlider);
+                    
+                    QPushButton* okBtn = new QPushButton("Apply & Close");
+                    connect(okBtn, &QPushButton::clicked, dlg, &QDialog::accept);
+                    layout->addWidget(okBtn);
+                    
+                    dlg->show();
+                    dlg->move(this->x() + 50, this->y() + 100);
+                }
             }
         }
     });
@@ -118,6 +180,27 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     QAction* resetFlowAction = controlsMenu->addAction("Reset &Flow");
     connect(resetFlowAction, &QAction::triggered, this, [this]() {
         if (simulation) simulation->resetFlow();
+    });
+
+    QMenu* settingsMenu = menuBar->addMenu("&Settings");
+    QAction* filterContactLinesAction = settingsMenu->addAction("Show wind in contact");
+    filterContactLinesAction->setCheckable(true);
+    filterContactLinesAction->setChecked(false);
+    connect(filterContactLinesAction, &QAction::toggled, this, [this](bool checked) {
+        if (simulation) {
+            simulation->filterContactLines = checked;
+            simulation->needsVTKUpdate = true;
+        }
+    });
+
+    QAction* filterUnperturbedSegmentsAction = settingsMenu->addAction("Show only perturbed segments");
+    filterUnperturbedSegmentsAction->setCheckable(true);
+    filterUnperturbedSegmentsAction->setChecked(false);
+    connect(filterUnperturbedSegmentsAction, &QAction::toggled, this, [this](bool checked) {
+        if (simulation) {
+            simulation->filterUnperturbedSegments = checked;
+            simulation->needsVTKUpdate = true;
+        }
     });
 
     setupUi();
@@ -309,9 +392,16 @@ void MainWindow::setupUi() {
 
     connect(alphaSlider, &QSlider::valueChanged, [this](int value) {
         simulation->flow.alpha = value;
+        simulation->setVisualRotation(0, 0, -value);
     });
     connect(alphaSlider, &QSlider::sliderReleased, this, &MainWindow::updateMorphing);
+    connect(camberSlider, &QSlider::valueChanged, [this](int value) {
+        simulation->setVisualRotation(0, 0, 0);
+    });
     connect(camberSlider, &QSlider::sliderReleased, this, &MainWindow::updateMorphing);
+    connect(thicknessSlider, &QSlider::valueChanged, [this](int value) {
+        simulation->setVisualRotation(0, 0, 0);
+    });
     connect(thicknessSlider, &QSlider::sliderReleased, this, &MainWindow::updateMorphing);
 
     connect(speedSlider, &QSlider::valueChanged, [this](int value) {
@@ -325,9 +415,9 @@ void MainWindow::setupUi() {
         simulation->setRakePosition(value / 100.0f);
     });
     
-    connect(streamlineDensitySlider, &QSlider::valueChanged, [this](int value) {
+    connect(streamlineDensitySlider, &QSlider::sliderReleased, [this]() {
         if (simulation) {
-            simulation->setStreamlineDensity(value);
+            simulation->setStreamlineDensity(streamlineDensitySlider->value());
         }
     });
 
@@ -368,7 +458,7 @@ void MainWindow::setupUi() {
         if (simulation) {
             simulation->flapping = checked;
             if (!checked) {
-                simulation->setVisualRotation(0.0);
+                simulation->fastUpdateRotation(simulation->flow.alpha);
             }
         }
     });
@@ -496,7 +586,7 @@ void MainWindow::updateSimulation() {
     if (simulation->flapping) {
         simulation->flapTimer += 0.05;
         double flapAngleDeg = 10.0 * std::sin(simulation->flapTimer);
-        simulation->setVisualRotation(flapAngleDeg);
+        simulation->fastUpdateRotation(simulation->flow.alpha + flapAngleDeg);
     }
     
     simulation->stepSimulation();

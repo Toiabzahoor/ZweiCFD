@@ -159,12 +159,16 @@ void Grid3D::computeStep(double tau) {
         
         rho[s_idx] = r;
         if (r > 0.0f) {
-            vx /= r; vy /= r; vz /= r;
+            float inv_r = 1.0f / r;
+            vx *= inv_r;
+            vy *= inv_r;
+            vz *= inv_r;
         }
         u[s_idx] = {vx, vy, vz, 0.0f};
 
         
         float usq = vx * vx + vy * vy + vz * vz;
+        #pragma omp simd
         for (int q = 0; q < D3Q19::Q; ++q) {
             float cu = D3Q19::cx[q] * vx + D3Q19::cy[q] * vy + D3Q19::cz[q] * vz;
             float feq = D3Q19::w[q] * r * (1.0f + 3.0f * cu + 4.5f * cu * cu - 1.5f * usq);
