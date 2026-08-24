@@ -26,6 +26,7 @@ struct CLIOptions {
     int gridNY = 0;
     int gridNZ = 0;
     double gridScale = 0.0;
+    std::string vtiExportFile = "";
 
     bool alphaSet = false;
     bool camberSet = false;
@@ -41,6 +42,7 @@ struct CLIOptions {
     bool nySet = false;
     bool nzSet = false;
     bool gridScaleSet = false;
+    bool vtiExportSet = false;
 };
 
 CLIOptions parseCLI(int argc, char* argv[]);

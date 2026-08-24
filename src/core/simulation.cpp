@@ -27,8 +27,8 @@ VTK_MODULE_INIT(vtkInteractionStyle);
 #include <vtkTransformPolyDataFilter.h>
 #include <vtkIntArray.h>
 #include <vtkSmartPointer.h>
-#include <vtkSphereSource.h>
 #include <vtkXMLPolyDataWriter.h>
+#include <vtkXMLImageDataWriter.h>
 #include <vtkRenderWindowInteractor.h>
 #include <vtkCellArray.h>
 #include <vtkFloatArray.h>
@@ -1351,6 +1351,135 @@ float Simulation::getLineWidth() const {
         return streamActor->GetProperty()->GetLineWidth();
     }
     return 2.0f;
+}
+
+bool Simulation::exportToVTI(const std::string& filename) {
+    if (!lbmSolver) return false;
+    const auto& grid = lbmSolver->getGrid();
+    int nx = grid.NX;
+    int ny = grid.NY;
+    int nz = grid.NZ;
+    int totalCells = nx * ny * nz;
+    if (totalCells <= 0) return false;
+
+    vtkSmartPointer<vtkImageData> imageData = vtkSmartPointer<vtkImageData>::New();
+    imageData->SetDimensions(nx, ny, nz);
+    double sp = (cachedLbmScale > 0.0f) ? (1.0 / (double)cachedLbmScale) : 0.02;
+    imageData->SetSpacing(sp, sp, sp);
+    imageData->SetOrigin(
+        (-nx / 2.0) * sp,
+        (-ny / 2.0) * sp,
+        (-nz / 2.0) * sp
+    );
+
+    vtkSmartPointer<vtkFloatArray> vel = vtkSmartPointer<vtkFloatArray>::New();
+    vel->SetName("Velocity");
+    vel->SetNumberOfComponents(3);
+    vel->SetNumberOfTuples(totalCells);
+
+    vtkSmartPointer<vtkFloatArray> spd = vtkSmartPointer<vtkFloatArray>::New();
+    spd->SetName("VelocityMagnitude");
+    spd->SetNumberOfComponents(1);
+    spd->SetNumberOfTuples(totalCells);
+
+    vtkSmartPointer<vtkFloatArray> dens = vtkSmartPointer<vtkFloatArray>::New();
+    dens->SetName("Density");
+    dens->SetNumberOfComponents(1);
+    dens->SetNumberOfTuples(totalCells);
+
+    vtkSmartPointer<vtkFloatArray> press = vtkSmartPointer<vtkFloatArray>::New();
+    press->SetName("Pressure");
+    press->SetNumberOfComponents(1);
+    press->SetNumberOfTuples(totalCells);
+
+    vtkSmartPointer<vtkFloatArray> sdfArr = vtkSmartPointer<vtkFloatArray>::New();
+    sdfArr->SetName("SDF");
+    sdfArr->SetNumberOfComponents(1);
+    sdfArr->SetNumberOfTuples(totalCells);
+
+    vtkSmartPointer<vtkFloatArray> vort = vtkSmartPointer<vtkFloatArray>::New();
+    vort->SetName("Vorticity");
+    vort->SetNumberOfComponents(3);
+    vort->SetNumberOfTuples(totalCells);
+
+    vtkSmartPointer<vtkFloatArray> vortMag = vtkSmartPointer<vtkFloatArray>::New();
+    vortMag->SetName("VorticityMagnitude");
+    vortMag->SetNumberOfComponents(1);
+    vortMag->SetNumberOfTuples(totalCells);
+
+    double q_inf = 0.5 * 1.225 * flow.V_inf * flow.V_inf;
+
+    #pragma omp parallel for collapse(3) schedule(static)
+    for (int z = 0; z < nz; ++z) {
+        for (int y = 0; y < ny; ++y) {
+            for (int x = 0; x < nx; ++x) {
+                int idx = z * (ny * nx) + y * nx + x;
+                float vx = grid.u[idx].x;
+                float vy = grid.u[idx].y;
+                float vz = grid.u[idx].z;
+                float s = std::sqrt(vx * vx + vy * vy + vz * vz);
+                float d = grid.rho[idx];
+                float p = (float)((d - 1.0f) * (1.0 / 3.0) * q_inf);
+
+                vel->SetTuple3(idx, vx, vy, vz);
+                spd->SetValue(idx, s);
+                dens->SetValue(idx, d);
+                press->SetValue(idx, p);
+                sdfArr->SetValue(idx, grid.sdf[idx]);
+
+                int x_prev = std::max(0, x - 1);
+                int x_next = std::min(nx - 1, x + 1);
+                int y_prev = std::max(0, y - 1);
+                int y_next = std::min(ny - 1, y + 1);
+                int z_prev = std::max(0, z - 1);
+                int z_next = std::min(nz - 1, z + 1);
+
+                int idx_xp = z * (ny * nx) + y * nx + x_next;
+                int idx_xm = z * (ny * nx) + y * nx + x_prev;
+                int idx_yp = z * (ny * nx) + y_next * nx + x;
+                int idx_ym = z * (ny * nx) + y_prev * nx + x;
+                int idx_zp = z_next * (ny * nx) + y * nx + x;
+                int idx_zm = z_prev * (ny * nx) + y * nx + x;
+
+                float inv_dx = (x_next > x_prev) ? 1.0f / ((x_next - x_prev) * (float)sp) : 0.0f;
+                float inv_dy = (y_next > y_prev) ? 1.0f / ((y_next - y_prev) * (float)sp) : 0.0f;
+                float inv_dz = (z_next > z_prev) ? 1.0f / ((z_next - z_prev) * (float)sp) : 0.0f;
+
+                float duz_dy = (grid.u[idx_yp].z - grid.u[idx_ym].z) * inv_dy;
+                float duy_dz = (grid.u[idx_zp].y - grid.u[idx_zm].y) * inv_dz;
+                float dux_dz = (grid.u[idx_zp].x - grid.u[idx_zm].x) * inv_dz;
+                float duz_dx = (grid.u[idx_xp].z - grid.u[idx_xm].z) * inv_dx;
+                float duy_dx = (grid.u[idx_xp].y - grid.u[idx_xm].y) * inv_dx;
+                float dux_dy = (grid.u[idx_yp].x - grid.u[idx_xm].x) * inv_dy;
+
+                float wx = duz_dy - duy_dz;
+                float wy = dux_dz - duz_dx;
+                float wz = duy_dx - dux_dy;
+                float wmag = std::sqrt(wx * wx + wy * wy + wz * wz);
+
+                vort->SetTuple3(idx, wx, wy, wz);
+                vortMag->SetValue(idx, wmag);
+            }
+        }
+    }
+
+    imageData->GetPointData()->AddArray(vel);
+    imageData->GetPointData()->AddArray(spd);
+    imageData->GetPointData()->AddArray(dens);
+    imageData->GetPointData()->AddArray(press);
+    imageData->GetPointData()->AddArray(sdfArr);
+    imageData->GetPointData()->AddArray(vort);
+    imageData->GetPointData()->AddArray(vortMag);
+
+    imageData->GetPointData()->SetVectors(vel);
+    imageData->GetPointData()->SetScalars(spd);
+
+    vtkSmartPointer<vtkXMLImageDataWriter> writer = vtkSmartPointer<vtkXMLImageDataWriter>::New();
+    writer->SetFileName(filename.c_str());
+    writer->SetInputData(imageData);
+    writer->SetDataModeToAppended();
+    writer->EncodeAppendedDataOff();
+    return writer->Write() == 1;
 }
 
 } 

@@ -36,6 +36,7 @@ void printHelp(const char* progName) {
     std::cout << "  --nz <num>              Set grid NZ dimension (default: 64)\n";
     std::cout << "  --lines <num>           Streamline line count (default: 100)\n";
     std::cout << "  --rake-y <val>          Streamline rake Y offset (default: 0.0)\n";
+    std::cout << "  --export-vti <path>     Export simulation field to ParaView .vti file\n";
     std::cout << "=================================================================\n";
 }
 
@@ -128,6 +129,9 @@ CLIOptions parseCLI(int argc, char* argv[]) {
         } else if (arg == "--rake-y" && i + 1 < argc) {
             opt.rakeY = std::stod(argv[++i]);
             opt.rakeYSet = true;
+        } else if ((arg == "--export-vti" || arg == "--vti" || arg == "-o") && i + 1 < argc) {
+            opt.vtiExportFile = argv[++i];
+            opt.vtiExportSet = true;
         }
     }
 
@@ -327,6 +331,15 @@ int runHeadlessCLI(const CLIOptions& opt, const Config& config) {
     std::cout << "    Time Per Step         : " << std::fixed << std::setprecision(2) << msPerStep << " ms/step\n";
     std::cout << "    LBM Throughput        : " << std::fixed << std::setprecision(2) << mlups << " MLUPS (Million Lattice Updates/s)\n";
     std::cout << "=================================================================\n\n";
+
+    if (opt.vtiExportSet && !opt.vtiExportFile.empty()) {
+        std::cout << "Exporting ParaView dataset to: " << opt.vtiExportFile << " ... ";
+        if (sim.exportToVTI(opt.vtiExportFile)) {
+            std::cout << "[SUCCESS]\n\n";
+        } else {
+            std::cout << "[FAILED]\n\n";
+        }
+    }
 
     return 0;
 }

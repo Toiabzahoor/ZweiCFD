@@ -25,6 +25,8 @@ Makefile
 output.txt
 imgui.ini
 lbm_dump_*.txt
+*.vti
+*.vtp
 .agents/
 AGENTS.md
 .gemini/

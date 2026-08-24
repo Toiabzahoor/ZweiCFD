@@ -28,6 +28,7 @@ find_package(VTK REQUIRED COMPONENTS
     FiltersModeling
     FiltersFlowPaths
     IOGeometry
+    IOXML
     RenderingVolume
     RenderingVolumeOpenGL2
 )
@@ -99,7 +100,7 @@ add_custom_command(TARGET ZweiCFD POST_BUILD
 if(WIN32)
     # Copy all required DLL dependencies to the build output directory
     add_custom_command(TARGET ZweiCFD POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:ZweiCFD> $<TARGET_FILE_DIR:ZweiCFD>
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:ZweiCFD> $<TARGET_FILE_DIR:ZweiCFD>
         COMMAND_EXPAND_LISTS
         VERBATIM
     )

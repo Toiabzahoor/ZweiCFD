@@ -66,6 +66,7 @@ public:
   void resetCameraView();
   void setLineWidth(float width);
   float getLineWidth() const;
+  bool exportToVTI(const std::string& filename);
   
   vtkRenderWindow* getRenderWindow() const { return renderWindow; }
 

@@ -15,6 +15,8 @@
 #include <QAction>
 #include <QDialog>
 #include <QProgressDialog>
+#include <QStatusBar>
+#include <QMessageBox>
 #include <QtConcurrent/QtConcurrent>
 #include <QFutureWatcher>
 #include <algorithm>
@@ -117,6 +119,26 @@ MainWindow::MainWindow(const CLIOptions* opt, QWidget *parent) : QMainWindow(par
                     simulation->freezeFlow = false;
                     simulation->updateVTKGeometry();
                 }
+            }
+        }
+    });
+    QAction* exportAction = fileMenu->addAction("&Export to ParaView (.vti)...");
+    exportAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_E));
+    connect(exportAction, &QAction::triggered, this, [this]() {
+        QString fileName = QFileDialog::getSaveFileName(
+            this,
+            "Export Simulation to ParaView VTI",
+            "simulation.vti",
+            "ParaView Image Data (*.vti);;All Files (*.*)"
+        );
+        if (!fileName.isEmpty()) {
+            if (!fileName.endsWith(".vti", Qt::CaseInsensitive)) {
+                fileName += ".vti";
+            }
+            if (simulation && simulation->exportToVTI(fileName.toStdString())) {
+                statusBar()->showMessage(QString("Successfully exported to %1").arg(fileName), 5000);
+            } else {
+                QMessageBox::warning(this, "Export Failed", "Failed to export simulation grid to .vti file.");
             }
         }
     });
