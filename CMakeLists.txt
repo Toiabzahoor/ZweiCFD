@@ -49,6 +49,8 @@ add_executable(ZweiCFD
     include/ZweiCFD/ui/main_window.hpp
     src/ui/controls_dialog.cpp
     include/ZweiCFD/ui/controls_dialog.hpp
+    src/ui/polar_dialog.cpp
+    include/ZweiCFD/ui/polar_dialog.hpp
 )
 
 find_package(Eigen3 QUIET)

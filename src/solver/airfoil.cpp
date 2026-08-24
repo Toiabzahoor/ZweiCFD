@@ -346,4 +346,28 @@ void Airfoil::generateCylinder(double radius, int n) {
     generatePanels();
 }
 
+void Airfoil::generateDiamond(double thickness) {
+    coordinates.clear();
+    name = "Diamond Airfoil";
+    double t2 = std::max(0.01, thickness) / 2.0;
+    coordinates.push_back({1.0, 0.0});
+    coordinates.push_back({0.5, t2});
+    coordinates.push_back({0.0, 0.0});
+    coordinates.push_back({0.5, -t2});
+    coordinates.push_back({1.0, 0.0});
+    generatePanels();
+}
+
+void Airfoil::generateFlatPlate(double thickness) {
+    coordinates.clear();
+    name = "Flat Plate";
+    double t2 = std::max(0.005, thickness) / 2.0;
+    coordinates.push_back({1.0, -t2});
+    coordinates.push_back({1.0, t2});
+    coordinates.push_back({0.0, t2});
+    coordinates.push_back({0.0, -t2});
+    coordinates.push_back({1.0, -t2});
+    generatePanels();
+}
+
 }

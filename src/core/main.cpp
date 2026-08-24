@@ -26,6 +26,14 @@ int main(int argc, char* argv[]) {
     } catch (...) {
     }
 
+    if (cliOpt.interactiveMenu) {
+        return zweicfd::runInteractiveCLIMenu(cliOpt, config);
+    }
+
+    if (cliOpt.polarSweep) {
+        return zweicfd::runPolarSweepCLI(cliOpt, config);
+    }
+
     if (cliOpt.headless || cliOpt.isCliMode) {
         return zweicfd::runHeadlessCLI(cliOpt, config);
     }

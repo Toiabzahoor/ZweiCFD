@@ -29,6 +29,7 @@ public:
 private slots:
     void updateSimulation();
     void openControlsDialog();
+    void openPolarSweepDialog();
     void applyKeyBindings(const QMap<QString, QKeySequence>& bindings);
 
 private:

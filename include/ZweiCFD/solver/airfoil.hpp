@@ -66,6 +66,8 @@ public:
   bool loadFrom3DMesh(const std::string &filename);
   void generateNACA(double m, double p, double t, int n = 100);
   void generateCylinder(double radius, int n = 100);
+  void generateDiamond(double thickness = 0.10);
+  void generateFlatPlate(double thickness = 0.02);
 
   void generatePanels(); 
   void rotateCoordinates(double angleDeg);

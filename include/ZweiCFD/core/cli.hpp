@@ -28,6 +28,15 @@ struct CLIOptions {
     double gridScale = 0.0;
     std::string vtiExportFile = "";
 
+    bool polarSweep = false;
+    double alphaMin = -4.0;
+    double alphaMax = 16.0;
+    double alphaStep = 2.0;
+    int polarSteps = 200;
+    int polarWarmup = 50;
+    std::string polarCsvFile = "polar_results.csv";
+    bool polarResetFlow = true;
+
     bool alphaSet = false;
     bool camberSet = false;
     bool thicknessSet = false;
@@ -43,10 +52,18 @@ struct CLIOptions {
     bool nzSet = false;
     bool gridScaleSet = false;
     bool vtiExportSet = false;
+    bool polarSweepSet = false;
+    bool alphaMinSet = false;
+    bool alphaMaxSet = false;
+    bool alphaStepSet = false;
+    bool polarCsvSet = false;
+    bool interactiveMenu = false;
 };
 
 CLIOptions parseCLI(int argc, char* argv[]);
 void printHelp(const char* progName);
 int runHeadlessCLI(const CLIOptions& options, const Config& config);
+int runPolarSweepCLI(const CLIOptions& options, const Config& config);
+int runInteractiveCLIMenu(CLIOptions& options, const Config& config);
 
 }

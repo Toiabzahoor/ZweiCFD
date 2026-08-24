@@ -1,4 +1,5 @@
 #include "ZweiCFD/ui/main_window.hpp"
+#include "ZweiCFD/ui/polar_dialog.hpp"
 #include "ZweiCFD/core/cli.hpp"
 
 #include <QVTKOpenGLNativeWidget.h>
@@ -208,6 +209,11 @@ MainWindow::MainWindow(const CLIOptions* opt, QWidget *parent) : QMainWindow(par
     connect(resetFlowAction, &QAction::triggered, this, [this]() {
         if (simulation) simulation->resetFlow();
     });
+
+    QMenu* toolsMenu = menuBar->addMenu("&Tools");
+    QAction* polarAction = toolsMenu->addAction("&Run Polar Sweep (Alpha Sweep)...");
+    polarAction->setShortcut(QKeySequence("Ctrl+P"));
+    connect(polarAction, &QAction::triggered, this, &MainWindow::openPolarSweepDialog);
 
     QMenu* resultsMenu = menuBar->addMenu("&Results");
     ldAction = resultsMenu->addAction("L/D Ratio: ---");
@@ -537,6 +543,11 @@ void MainWindow::setupUi(const CLIOptions* opt) {
 void MainWindow::openControlsDialog() {
     ControlsDialog dlg(this);
     connect(&dlg, &ControlsDialog::bindingsChanged, this, &MainWindow::applyKeyBindings);
+    dlg.exec();
+}
+
+void MainWindow::openPolarSweepDialog() {
+    PolarDialog dlg(simulation.get(), this);
     dlg.exec();
 }
 
