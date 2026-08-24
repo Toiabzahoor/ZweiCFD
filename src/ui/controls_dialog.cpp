@@ -25,8 +25,6 @@ QVector<KeyAction> ControlsDialog::getDefaultActions() {
         {"rake_down", "Move Streamline Rake Down", "Flow & Air", QKeySequence("Shift+Down"), QKeySequence("Shift+Down")},
         {"lines_inc", "Increase Line Count", "Flow & Air", QKeySequence("]"), QKeySequence("]")},
         {"lines_dec", "Decrease Line Count", "Flow & Air", QKeySequence("["), QKeySequence("[")},
-        {"line_width_up", "Increase Line Thickness", "Flow & Air", QKeySequence("Shift+]"), QKeySequence("Shift+]")},
-        {"line_width_down", "Decrease Line Thickness", "Flow & Air", QKeySequence("Shift+["), QKeySequence("Shift+[")},
         {"turbo_mode", "Turbo Speed", "Flow & Air", QKeySequence("Space"), QKeySequence("Space")},
         {"reset_flow", "Reset Flow Field", "Flow & Air", QKeySequence("R"), QKeySequence("R")},
         

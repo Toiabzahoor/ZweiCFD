@@ -5,6 +5,8 @@
 
 namespace zweicfd {
 
+#ifndef __APPLE__
+
 static const char* computeShaderSource = R"(#version 430 core
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -261,5 +263,40 @@ void GPUAdvection::stepAdvection(float dt) {
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
     glUseProgram(0);
 }
+
+#else
+
+GPUAdvection::GPUAdvection() = default;
+GPUAdvection::~GPUAdvection() = default;
+
+bool GPUAdvection::initialize(int maxParticles) {
+    (void)maxParticles;
+    initialized = false;
+    return false;
+}
+
+bool GPUAdvection::initShaders() {
+    return false;
+}
+
+void GPUAdvection::initBuffers() {}
+
+void GPUAdvection::setDomainBounds(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
+    (void)minX; (void)minY; (void)minZ; (void)maxX; (void)maxY; (void)maxZ;
+}
+
+void GPUAdvection::setInletParams(float inletX, float centerY, float spanY, float spanZ) {
+    (void)inletX; (void)centerY; (void)spanY; (void)spanZ;
+}
+
+void GPUAdvection::updateVelocityField(const float* vtkData, int nx, int ny, int nz) {
+    (void)vtkData; (void)nx; (void)ny; (void)nz;
+}
+
+void GPUAdvection::stepAdvection(float dt) {
+    (void)dt;
+}
+
+#endif
 
 }

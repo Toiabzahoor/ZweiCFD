@@ -131,18 +131,14 @@ void Grid3D::computeStep(double tau) {
             int ny = y - D3Q19::cy[q];
             int nz = z - D3Q19::cz[q];
 
-            
-            if (ny < 0) ny = NY - 1; else if (ny >= NY) ny = 0;
             if (nz < 0) nz = NZ - 1; else if (nz >= NZ) nz = 0;
+            if (nx < 0) nx = NX - 1; else if (nx >= NX) nx = 0;
 
-            if (nx < 0 || nx >= NX) {
-                
-                f_local[q] = f[getIndex(x, y, z, q)];
+            if (ny < 0 || ny >= NY) {
+                f_local[q] = f[getIndex(x, y, z, D3Q19::opposite[q])];
             } else if (sdf[getScalarIndex(nx, ny, nz)] <= 0.0f) {
                 
                 f_local[q] = f[getIndex(x, y, z, D3Q19::opposite[q])];
-                
-                
                 total_fx += 2.0 * f_local[q] * (-D3Q19::cx[q]);
                 total_fy += 2.0 * f_local[q] * (-D3Q19::cy[q]);
             } else {

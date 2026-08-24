@@ -3,6 +3,7 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <atomic>
 
 #include "ZweiCFD/solver/airfoil.hpp"
 #include "ZweiCFD/solver/solver.hpp"
@@ -100,9 +101,9 @@ public:
   void updateStreamlineSeeds();
 
   zweicfd::Coefficients results;
-  bool filterContactLines = false;
-  bool filterUnperturbedSegments = false;
   bool needsVTKUpdate = true;
+  int currentTheme = 0;
+  std::atomic<bool> isRebuilding{false};
 
 private:
   vtkSmartPointer<vtkRenderer> renderer;
@@ -139,6 +140,10 @@ private:
   vtkSmartPointer<vtkGlyph3D> drawnGlyph[3];
   
   vtkSmartPointer<vtkLookupTable> lut;
+  vtkSmartPointer<vtkLookupTable> jetLut;
+  vtkSmartPointer<vtkLookupTable> windTunnelLut;
+  vtkSmartPointer<vtkLookupTable> neonLut;
+  vtkSmartPointer<vtkLookupTable> thermalLut;
   int frameCounter = 0;
 };
 

@@ -17,11 +17,13 @@
 
 namespace zweicfd {
 
+struct CLIOptions;
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(const CLIOptions* opt = nullptr, QWidget *parent = nullptr);
     ~MainWindow() override;
 
 private slots:
@@ -30,7 +32,7 @@ private slots:
     void applyKeyBindings(const QMap<QString, QKeySequence>& bindings);
 
 private:
-    void setupUi();
+    void setupUi(const CLIOptions* opt = nullptr);
     void setupShortcuts();
     void handleKeyAction(const QString& actionId);
     void updateMorphing();
@@ -56,13 +58,20 @@ private:
     QSlider* thicknessSlider;
     QSlider* speedSlider;
     QSlider* streamlineDensitySlider;
-    QSlider* lineWidthSlider;
     QSlider* brushSizeSlider;
     QComboBox* brushShapeSelector;
     QCheckBox* particlesToggle;
     QPushButton* resetFlowButton;
     QPushButton* controlsButton;
     QTimer *simTimer;
+
+    QAction* ldAction = nullptr;
+    QAction* clAction = nullptr;
+    QAction* cdAction = nullptr;
+    QAction* liftAction = nullptr;
+    QAction* dragAction = nullptr;
+    QAction* alphaAction = nullptr;
+    QAction* speedAction = nullptr;
 
     QMap<QString, QKeySequence> keyBindings;
     QVector<QShortcut*> activeShortcuts;

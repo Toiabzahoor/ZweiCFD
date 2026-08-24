@@ -1,4 +1,5 @@
 #include "ZweiCFD/ui/main_window.hpp"
+#include "ZweiCFD/core/cli.hpp"
 
 #include <QVTKOpenGLNativeWidget.h>
 #include <vtkGenericOpenGLRenderWindow.h>
@@ -13,11 +14,14 @@
 #include <QFileDialog>
 #include <QAction>
 #include <QDialog>
+#include <QProgressDialog>
+#include <QtConcurrent/QtConcurrent>
+#include <QFutureWatcher>
 #include <algorithm>
 
 namespace zweicfd {
 
-MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
+MainWindow::MainWindow(const CLIOptions* opt, QWidget *parent) : QMainWindow(parent) {
     setWindowTitle("ZweiCFD Engine - Qt + VTK");
     resize(1400, 800);
 
@@ -53,18 +57,18 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                 shapeSelector->setCurrentIndex(2);
                 shapeSelector->blockSignals(false);
                 
-                simulation->rebuildSolverWithRotation();
-                simulation->freezeFlow = false;
-                simulation->updateVTKGeometry();
-                
                 if (simulation->foil.is3D()) {
+                    simulation->freezeFlow = true;
+                    simulation->rotatedFoil = simulation->foil;
+                    simulation->updateVTKGeometry();
+                    
                     QDialog* dlg = new QDialog(this);
                     dlg->setWindowTitle("Set Initial Model Orientation");
                     dlg->setAttribute(Qt::WA_DeleteOnClose);
                     dlg->setModal(false);
                     QVBoxLayout* layout = new QVBoxLayout(dlg);
                     
-                    QLabel* infoLabel = new QLabel("Adjust orientation so the model faces forward (left to right):");
+                    QLabel* infoLabel = new QLabel("Adjust initial model orientation:");
                     layout->addWidget(infoLabel);
                     
                     QSlider* pitchSlider = new QSlider(Qt::Horizontal);
@@ -79,27 +83,20 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                     QLabel* rLabel = new QLabel("Roll (Z): 0");
                     
                     auto updateRotation = [this, pitchSlider, yawSlider, rollSlider, pLabel, yLabel, rLabel]() {
-                        pLabel->setText(QString("Pitch (X): %1").arg(pitchSlider->value()));
-                        yLabel->setText(QString("Yaw (Y): %1").arg(yawSlider->value()));
-                        rLabel->setText(QString("Roll (Z): %1").arg(rollSlider->value()));
+                        pLabel->setText(QString("Pitch (X): %1°").arg(pitchSlider->value()));
+                        yLabel->setText(QString("Yaw (Y): %1°").arg(yawSlider->value()));
+                        rLabel->setText(QString("Roll (Z): %1°").arg(rollSlider->value()));
                         simulation->foil.setBaseRotation(pitchSlider->value(), yawSlider->value(), rollSlider->value());
-                        simulation->setVisualRotation(pitchSlider->value(), yawSlider->value(), rollSlider->value());
+                        simulation->rotatedFoil = simulation->foil;
+                        simulation->updateVTKGeometry();
                         if (auto vtkRenderWidget = qobject_cast<QVTKOpenGLNativeWidget*>(centralWidget())) {
                             vtkRenderWidget->renderWindow()->Render();
                         }
                     };
                     
-                    auto finalizeRotation = [this]() {
-                        updateMorphing();
-                    };
-                    
                     connect(pitchSlider, &QSlider::valueChanged, dlg, updateRotation);
                     connect(yawSlider, &QSlider::valueChanged, dlg, updateRotation);
                     connect(rollSlider, &QSlider::valueChanged, dlg, updateRotation);
-                    
-                    connect(pitchSlider, &QSlider::sliderReleased, dlg, finalizeRotation);
-                    connect(yawSlider, &QSlider::sliderReleased, dlg, finalizeRotation);
-                    connect(rollSlider, &QSlider::sliderReleased, dlg, finalizeRotation);
                     
                     layout->addWidget(pLabel); layout->addWidget(pitchSlider);
                     layout->addWidget(yLabel); layout->addWidget(yawSlider);
@@ -107,10 +104,18 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                     
                     QPushButton* okBtn = new QPushButton("Apply & Close");
                     connect(okBtn, &QPushButton::clicked, dlg, &QDialog::accept);
+                    connect(dlg, &QDialog::finished, this, [this]() {
+                        updateMorphing();
+                        simulation->freezeFlow = false;
+                    });
                     layout->addWidget(okBtn);
                     
                     dlg->show();
                     dlg->move(this->x() + 50, this->y() + 100);
+                } else {
+                    simulation->rebuildSolverWithRotation();
+                    simulation->freezeFlow = false;
+                    simulation->updateVTKGeometry();
                 }
             }
         }
@@ -182,39 +187,35 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         if (simulation) simulation->resetFlow();
     });
 
-    QMenu* settingsMenu = menuBar->addMenu("&Settings");
-    QAction* filterContactLinesAction = settingsMenu->addAction("Show wind in contact");
-    filterContactLinesAction->setCheckable(true);
-    filterContactLinesAction->setChecked(false);
-    connect(filterContactLinesAction, &QAction::toggled, this, [this](bool checked) {
-        if (simulation) {
-            simulation->filterContactLines = checked;
-            simulation->needsVTKUpdate = true;
-        }
-    });
+    QMenu* resultsMenu = menuBar->addMenu("&Results");
+    ldAction = resultsMenu->addAction("L/D Ratio: ---");
+    clAction = resultsMenu->addAction("Lift Coefficient (CL): ---");
+    cdAction = resultsMenu->addAction("Drag Coefficient (CD): ---");
+    resultsMenu->addSeparator();
+    liftAction = resultsMenu->addAction("Lift Force: ---");
+    dragAction = resultsMenu->addAction("Drag Force: ---");
+    resultsMenu->addSeparator();
+    alphaAction = resultsMenu->addAction("Angle of Attack: 0.0°");
+    speedAction = resultsMenu->addAction("Airspeed: 10.0 m/s");
 
-    QAction* filterUnperturbedSegmentsAction = settingsMenu->addAction("Show only perturbed segments");
-    filterUnperturbedSegmentsAction->setCheckable(true);
-    filterUnperturbedSegmentsAction->setChecked(false);
-    connect(filterUnperturbedSegmentsAction, &QAction::toggled, this, [this](bool checked) {
-        if (simulation) {
-            simulation->filterUnperturbedSegments = checked;
-            simulation->needsVTKUpdate = true;
-        }
-    });
-
-    setupUi();
+    setupUi(opt);
     setupShortcuts();
 }
 
 MainWindow::~MainWindow() = default;
 
 void MainWindow::updateMorphing() {
+    if (!simulation || simulation->isRebuilding) return;
     int shapeIdx = shapeSelector->currentIndex();
     
     bool isNACA = (shapeIdx == 0);
     camberSlider->setEnabled(isNACA);
     thicknessSlider->setEnabled(isNACA);
+    flapToggle->setEnabled(isNACA);
+    if (!isNACA) {
+        flapToggle->setChecked(false);
+        simulation->flapping = false;
+    }
 
     if (shapeIdx == 0) {
         double m = camberSlider->value() / 100.0;
@@ -226,12 +227,45 @@ void MainWindow::updateMorphing() {
     } else if (shapeIdx == 3) {
         simulation->foil.generateCylinder(0.001, 3);
     }
-    simulation->rebuildSolverWithRotation();
-    simulation->freezeFlow = false;
-    simulation->updateVTKGeometry();
+
+    if (!this->isVisible()) {
+        simulation->isRebuilding = true;
+        simulation->rebuildSolverWithRotation();
+        simulation->freezeFlow = false;
+        simulation->updateVTKGeometry();
+        simulation->isRebuilding = false;
+        return;
+    }
+
+    if (simTimer) simTimer->stop();
+    simulation->isRebuilding = true;
+
+    QProgressDialog* progress = new QProgressDialog("Voxelizing Model and Starting Solver...", "", 0, 0, this);
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setCancelButton(nullptr);
+    progress->show();
+
+    QFutureWatcher<void>* watcher = new QFutureWatcher<void>(this);
+    connect(watcher, &QFutureWatcher<void>::finished, [this, progress, watcher]() {
+        progress->close();
+        progress->deleteLater();
+        watcher->deleteLater();
+        simulation->freezeFlow = false;
+        simulation->updateVTKGeometry();
+        simulation->isRebuilding = false;
+        if (simTimer) simTimer->start(22);
+        if (auto vtkRenderWidget = qobject_cast<QVTKOpenGLNativeWidget*>(centralWidget())) {
+            vtkRenderWidget->renderWindow()->Render();
+        }
+    });
+
+    QFuture<void> future = QtConcurrent::run([this]() {
+        simulation->rebuildSolverWithRotation();
+    });
+    watcher->setFuture(future);
 }
 
-void MainWindow::setupUi() {
+void MainWindow::setupUi(const CLIOptions* opt) {
     QToolBar* topBar = new QToolBar("Settings", this);
     topBar->setMovable(false);
     addToolBar(Qt::TopToolBarArea, topBar);
@@ -295,8 +329,8 @@ void MainWindow::setupUi() {
 
     toolbar->addWidget(new QLabel(" Speed: "));
     speedSlider = new QSlider(Qt::Horizontal);
-    speedSlider->setRange(1, 20);
-    speedSlider->setValue(5);
+    speedSlider->setRange(1, 10);
+    speedSlider->setValue(3);
     speedSlider->setFixedWidth(80);
     toolbar->addWidget(speedSlider);
 
@@ -313,13 +347,6 @@ void MainWindow::setupUi() {
     streamlineDensitySlider->setValue(100);
     streamlineDensitySlider->setFixedWidth(70);
     toolbar->addWidget(streamlineDensitySlider);
-
-    toolbar->addWidget(new QLabel(" Width: "));
-    lineWidthSlider = new QSlider(Qt::Horizontal);
-    lineWidthSlider->setRange(1, 10);
-    lineWidthSlider->setValue(2);
-    lineWidthSlider->setFixedWidth(60);
-    toolbar->addWidget(lineWidthSlider);
     
     toolbar->addSeparator();
 
@@ -405,7 +432,8 @@ void MainWindow::setupUi() {
     connect(thicknessSlider, &QSlider::sliderReleased, this, &MainWindow::updateMorphing);
 
     connect(speedSlider, &QSlider::valueChanged, [this](int value) {
-        simulation->flow.V_inf = value / 100.0;
+        simulation->flow.V_inf = static_cast<double>(value) * 5.0;
+        simulation->stepsPerFrame = std::clamp(value, 1, 8);
     });
     connect(speedSlider, &QSlider::sliderReleased, [this]() {
         simulation->resetFlow();
@@ -418,12 +446,6 @@ void MainWindow::setupUi() {
     connect(streamlineDensitySlider, &QSlider::sliderReleased, [this]() {
         if (simulation) {
             simulation->setStreamlineDensity(streamlineDensitySlider->value());
-        }
-    });
-
-    connect(lineWidthSlider, &QSlider::valueChanged, [this](int value) {
-        if (simulation) {
-            simulation->setLineWidth(static_cast<float>(value));
         }
     });
 
@@ -470,6 +492,22 @@ void MainWindow::setupUi() {
     connect(brushShapeSelector, QOverload<int>::of(&QComboBox::currentIndexChanged), [this](int index) {
         if (simulation) simulation->brushShape = index;
     });
+
+    if (opt) {
+        if (opt->alphaSet) alphaSlider->setValue(static_cast<int>(std::round(opt->alpha)));
+        if (opt->camberSet) camberSlider->setValue(static_cast<int>(std::round(opt->camber * 100.0)));
+        if (opt->thicknessSet) thicknessSlider->setValue(static_cast<int>(std::round(opt->thickness * 100.0)));
+        if (opt->speedSet) speedSlider->setValue(static_cast<int>(std::clamp(std::round(opt->speed / 5.0), 1.0, 10.0)));
+        if (opt->linesSet) streamlineDensitySlider->setValue(opt->lines);
+        if (opt->rakeYSet) rakeYSlider->setValue(static_cast<int>(std::round(opt->rakeY * 100.0)));
+        if (opt->shapeSet) shapeSelector->setCurrentIndex(opt->shape);
+        if (opt->modelSet && !opt->modelFile.empty()) {
+            simulation->foil.loadFromFile(opt->modelFile);
+            shapeSelector->blockSignals(true);
+            shapeSelector->setCurrentIndex(2);
+            shapeSelector->blockSignals(false);
+        }
+    }
 
     updateMorphing();
 }
@@ -520,8 +558,10 @@ void MainWindow::handleKeyAction(const QString& actionId) {
     } else if (actionId == "thickness_down") {
         thicknessSlider->setValue(std::max(thicknessSlider->minimum(), thicknessSlider->value() - 1));
         updateMorphing();
-    } else if (actionId == "toggle_flap") {
-        flapToggle->setChecked(!flapToggle->isChecked());
+    } else    if (actionId == "toggle_flap") {
+        if (flapToggle->isEnabled()) {
+            flapToggle->setChecked(!flapToggle->isChecked());
+        }
     } else if (actionId == "speed_up") {
         speedSlider->setValue(std::min(speedSlider->maximum(), speedSlider->value() + 1));
         if (simulation) simulation->resetFlow();
@@ -536,10 +576,6 @@ void MainWindow::handleKeyAction(const QString& actionId) {
         streamlineDensitySlider->setValue(std::min(streamlineDensitySlider->maximum(), streamlineDensitySlider->value() + 50));
     } else if (actionId == "lines_dec") {
         streamlineDensitySlider->setValue(std::max(streamlineDensitySlider->minimum(), streamlineDensitySlider->value() - 50));
-    } else if (actionId == "line_width_up") {
-        lineWidthSlider->setValue(std::min(lineWidthSlider->maximum(), lineWidthSlider->value() + 1));
-    } else if (actionId == "line_width_down") {
-        lineWidthSlider->setValue(std::max(lineWidthSlider->minimum(), lineWidthSlider->value() - 1));
     } else if (actionId == "turbo_mode") {
         if (simulation) {
             simulation->resetCameraView();
@@ -583,6 +619,8 @@ void MainWindow::handleKeyAction(const QString& actionId) {
 }
 
 void MainWindow::updateSimulation() {
+    if (!simulation || simulation->isRebuilding) return;
+
     if (simulation->flapping) {
         simulation->flapTimer += 0.05;
         double flapAngleDeg = 10.0 * std::sin(simulation->flapTimer);
@@ -593,17 +631,51 @@ void MainWindow::updateSimulation() {
     
     if (simulation->lbmSolver) {
         const auto& grid = simulation->lbmSolver->getGrid();
-        double drag = grid.force_x;
-        double lift = grid.force_y;
+        double drag = (double)grid.force_x;
+        double lift = (double)grid.force_y;
         
-        double raw_ld = (std::abs(drag) > 1e-6) ? (lift / drag) : 0.0;
+        double alphaEMA = 0.01; 
+        static double ema_cl = 0.0;
+        static double ema_cd = 0.0;
+        static double ema_lift = 0.0;
+        static double ema_drag = 0.0;
         
-        double alphaEMA = 0.05; 
-        ema_ld = alphaEMA * raw_ld + (1.0 - alphaEMA) * ema_ld;
+        double scale = (double)simulation->cachedLbmScale;
+        double a_ref_lattice = 1.0;
+        if (simulation->foil.is3D()) {
+            a_ref_lattice = std::max(50.0, ((double)simulation->cowWidth * scale) * (std::max(0.2, (double)simulation->cowHeight) * scale));
+        } else {
+            a_ref_lattice = std::max(50.0, (1.0 * scale) * (double)simulation->config.lbmGridNZ);
+        }
+        
+        double f_dyn_lattice = 0.00125 * a_ref_lattice;
+        
+        double raw_cd = std::abs(drag) / f_dyn_lattice;
+        double raw_cl = lift / f_dyn_lattice;
+        
+        ema_cd = alphaEMA * raw_cd + (1.0 - alphaEMA) * ema_cd;
+        ema_cl = alphaEMA * raw_cl + (1.0 - alphaEMA) * ema_cl;
+        
+        double q_inf = 0.5 * 1.225 * simulation->flow.V_inf * simulation->flow.V_inf;
+        double ref_area_m2 = 1.0;
+        double lift_N = ema_cl * q_inf * ref_area_m2;
+        double drag_N = ema_cd * q_inf * ref_area_m2;
+        
+        ema_drag = alphaEMA * drag_N + (1.0 - alphaEMA) * ema_drag;
+        ema_lift = alphaEMA * lift_N + (1.0 - alphaEMA) * ema_lift;
+        
+        ema_ld = (std::abs(ema_cd) > 1e-6) ? (ema_cl / ema_cd) : 0.0;
         
         static int scoreCounter = 0;
-        if (++scoreCounter % 8 == 0) {
+        if (++scoreCounter % 6 == 0) {
             scoreLabel->setText(QString(" L/D: %1 ").arg(ema_ld, 0, 'f', 2));
+            if (ldAction) ldAction->setText(QString("L/D Ratio: %1").arg(ema_ld, 0, 'f', 2));
+            if (clAction) clAction->setText(QString("Lift Coefficient (CL): %1").arg(ema_cl, 0, 'f', 3));
+            if (cdAction) cdAction->setText(QString("Drag Coefficient (CD): %1").arg(ema_cd, 0, 'f', 3));
+            if (liftAction) liftAction->setText(QString("Lift Force: %1 N").arg(ema_lift, 0, 'f', 2));
+            if (dragAction) dragAction->setText(QString("Drag Force: %1 N").arg(ema_drag, 0, 'f', 2));
+            if (alphaAction) alphaAction->setText(QString("Angle of Attack: %1°").arg(simulation->flow.alpha, 0, 'f', 1));
+            if (speedAction) speedAction->setText(QString("Airspeed: %1 m/s").arg(simulation->flow.V_inf, 0, 'f', 1));
         }
     }
 

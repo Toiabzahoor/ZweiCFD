@@ -15,25 +15,34 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install System Dependencies
+      - name: Setup Conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          channels: conda-forge
+          channel-priority: strict
+          miniforge-version: latest
+          activate-environment: build-env
+
+      - name: Install Dependencies
+        shell: bash -el {0}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            cmake \
-            ninja-build \
-            g++ \
-            libgl1-mesa-dev \
-            libglu1-mesa-dev \
-            libx11-dev \
-            libomp-dev \
-            qt6-base-dev \
-            libvtk9-dev
+          conda install -y cxx-compiler cmake ninja vtk qt6-main libgomp eigen
 
       - name: Configure CMake
+        shell: bash -el {0}
         run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build ZweiCFD
+        shell: bash -el {0}
         run: cmake --build build --config Release --parallel
+
+      - name: Test Linux Binary (Headless)
+        shell: bash -el {0}
+        run: |
+          ./build/ZweiCFD --help
+          ./build/ZweiCFD --headless --preset cylinder --steps 30 -v
+          ./build/ZweiCFD --headless --alpha 5 -c 0.04 -t 0.12 -s 20 --steps 50 -v
 
       - name: Upload Linux Binary
         uses: actions/upload-artifact@v4
@@ -52,15 +61,21 @@ jobs:
       - name: Install Homebrew Dependencies
         run: |
           brew update
-          brew install cmake ninja qt@6 vtk libomp
+          brew install cmake ninja qt@6 vtk libomp eigen
 
       - name: Configure CMake
         run: |
           cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix vtk);$(brew --prefix libomp)"
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix vtk)"
 
       - name: Build ZweiCFD
         run: cmake --build build --config Release --parallel
+
+      - name: Test macOS Binary (Headless)
+        run: |
+          ./build/ZweiCFD --help
+          ./build/ZweiCFD --headless --preset cylinder --steps 30 -v
+          ./build/ZweiCFD --headless --alpha 5 -c 0.04 -t 0.12 -s 20 --steps 50 -v
 
       - name: Upload macOS Binary
         uses: actions/upload-artifact@v4
@@ -81,21 +96,40 @@ jobs:
         with:
           msystem: UCRT64
           update: true
+          path-type: inherit
           install: >-
+            git
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-tools
             mingw-w64-ucrt-x86_64-vtk
-            mingw-w64-ucrt-x86_64-openmp
+            mingw-w64-ucrt-x86_64-eigen3
+            mingw-w64-ucrt-x86_64-nlohmann-json
 
       - name: Configure CMake
         shell: msys2 {0}
-        run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
+        run: |
+          export PATH=/ucrt64/bin:$PATH
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=/ucrt64/bin/gcc.exe \
+            -DCMAKE_CXX_COMPILER=/ucrt64/bin/g++.exe \
+            -DCMAKE_MAKE_PROGRAM=/ucrt64/bin/ninja.exe
 
       - name: Build & Package ZweiCFD
         shell: msys2 {0}
-        run: cmake --build build --config Release --parallel
+        run: |
+          export PATH=/ucrt64/bin:$PATH
+          cmake --build build --config Release --parallel
+
+      - name: Test Windows Binary (Headless)
+        shell: msys2 {0}
+        run: |
+          export PATH=/ucrt64/bin:$PATH
+          ./build/ZweiCFD.exe --help
+          ./build/ZweiCFD.exe --headless --preset cylinder --steps 30 -v
+          ./build/ZweiCFD.exe --headless --alpha 5 -c 0.04 -t 0.12 -s 20 --steps 50 -v
 
       - name: Upload Windows Binary
         uses: actions/upload-artifact@v4

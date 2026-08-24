@@ -2,7 +2,11 @@
 
 #include <vector>
 #include <memory>
+#ifndef __APPLE__
 #include <QOpenGLFunctions_4_3_Core>
+#else
+#include <QOpenGLFunctions>
+#endif
 #include <QOpenGLContext>
 #include <QOffscreenSurface>
 
@@ -13,7 +17,11 @@ struct alignas(16) ParticleData {
     float velX, velY, velZ, lifetime;
 };
 
+#ifndef __APPLE__
 class GPUAdvection : protected QOpenGLFunctions_4_3_Core {
+#else
+class GPUAdvection : protected QOpenGLFunctions {
+#endif
 public:
     GPUAdvection();
     ~GPUAdvection();

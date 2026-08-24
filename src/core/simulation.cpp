@@ -179,16 +179,27 @@ void Simulation::rebuildSolverWithRotation() {
       rotatedFoil.getMesh3D()->GetBounds(bounds);
       cowWidth = std::max(0.1, bounds[1] - bounds[0]);
       cowHeight = std::max(0.1, bounds[3] - bounds[2]);
+      double cowDepth = std::max(0.1, bounds[5] - bounds[4]);
       
-      float scaleByWidth = 0.50f * config.lbmGridNX / (float)cowWidth;
-      float scaleByHeight = 0.60f * config.lbmGridNY / (float)cowHeight;
-      lbmScale = std::min(scaleByWidth, scaleByHeight);
-      lbmScale = std::max(16.0f, std::min(lbmScale, 48.0f));
+      float scaleByWidth = (config.lbmGridNX - 4.0f) / (float)cowWidth;
+      float scaleByHeight = (config.lbmGridNY - 4.0f) / (float)cowHeight;
+      float scaleByDepth = (config.lbmGridNZ - 4.0f) / (float)cowDepth;
+      
+      lbmScale = std::min({scaleByWidth, scaleByHeight, scaleByDepth});
+      lbmScale = std::min(lbmScale, 200.0f);
       cachedLbmScale = lbmScale;
+
+      float offsetX = -0.15f;
+      double margin = 6.0 / (double)lbmScale;
+      double minBx = bounds[0] - margin;
+      double maxBx = bounds[1] + margin;
+      double minBy = bounds[2] - margin;
+      double maxBy = bounds[3] + margin;
+      double minBz = bounds[4] - margin;
+      double maxBz = bounds[5] + margin;
 
       auto implicitDist = vtkSmartPointer<vtkImplicitPolyDataDistance>::New();
       implicitDist->SetInput(rotatedFoil.getMesh3D());
-      float offsetX = -0.15f;
 
       #pragma omp parallel for collapse(3) reduction(+:internalNodes)
       for (int z = 0; z < grid.NZ; ++z) {
@@ -197,8 +208,22 @@ void Simulation::rebuildSolverWithRotation() {
             double physX = (x - grid.NX / 2.0) / lbmScale - offsetX;
             double physY = (y - grid.NY / 2.0) / lbmScale;
             double physZ = (z - grid.NZ / 2.0) / lbmScale;
-            double pt[3] = {physX, physY, physZ};
-            double d = implicitDist->EvaluateFunction(pt);
+
+            double d;
+            if (physX < minBx || physX > maxBx ||
+                physY < minBy || physY > maxBy ||
+                physZ < minBz || physZ > maxBz) {
+              double dx = std::max({bounds[0] - physX, 0.0, physX - bounds[1]});
+              double dy = std::max({bounds[2] - physY, 0.0, physY - bounds[3]});
+              double dz = std::max({bounds[4] - physZ, 0.0, physZ - bounds[5]});
+              d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            } else {
+              double pt[3] = {physX, physY, physZ};
+              #pragma omp critical
+              {
+                d = implicitDist->EvaluateFunction(pt);
+              }
+            }
 
             int scalarIdx = grid.getScalarIndex(x, y, z);
             float mesh_sdf = (float)(d * lbmScale);
@@ -319,29 +344,6 @@ void Simulation::rebuildSolverWithRotation() {
     freezeFlow = false;
     results = {0.1, 0.05, -0.02};
     needsVTKUpdate = true;
-
-    if (velocityField) {
-        float renderScale = 40.0f;
-        float spacing = renderScale / cachedLbmScale;
-        velocityField->SetSpacing(spacing, spacing, spacing);
-        velocityField->SetOrigin(
-            (-config.lbmGridNX / 2.0f) * spacing,
-            (-config.lbmGridNY / 2.0f) * spacing,
-            (-config.lbmGridNZ / 2.0f) * spacing
-        );
-        velocityField->Modified();
-    }
-    if (gpuAdvection) {
-        float renderScale = 40.0f;
-        float spacing = renderScale / cachedLbmScale;
-        float spreadX = (config.lbmGridNX / 2.0f) * spacing;
-        float spreadY = (config.lbmGridNY / 2.0f) * spacing;
-        float spreadZ = (config.lbmGridNZ / 2.0f) * spacing;
-        float inletX = (-config.lbmGridNX / 2.0f + 2.0f) * spacing;
-        gpuAdvection->setDomainBounds(-spreadX, -spreadY, -spreadZ, spreadX, spreadY, spreadZ);
-        gpuAdvection->setInletParams(inletX, 0.0f, spreadY * 1.9f, spreadZ * 1.9f);
-    }
-    updateStreamlineSeeds();
   }
 }
 
@@ -416,30 +418,67 @@ void Simulation::setupVTKWithWindow(vtkRenderWindow* window) {
     streamTracer->SetInputData(velocityField);
     streamTracer->SetSourceData(streamSeeds);
     streamTracer->SetIntegrationStepUnit(vtkStreamTracer::CELL_LENGTH_UNIT);
-    streamTracer->SetMaximumPropagation(2000.0);
-    streamTracer->SetMaximumNumberOfSteps(2000);
-    streamTracer->SetInitialIntegrationStep(0.3);
+    streamTracer->SetMaximumPropagation(300.0);
+    streamTracer->SetMaximumNumberOfSteps(300);
+    streamTracer->SetInitialIntegrationStep(0.5);
+    streamTracer->SetMinimumIntegrationStep(0.1);
+    streamTracer->SetMaximumIntegrationStep(1.5);
     streamTracer->SetIntegrationDirectionToForward();
     
-    lut = vtkSmartPointer<vtkLookupTable>::New();
-    lut->SetNumberOfTableValues(256);
-    lut->SetHueRange(0.667, 0.0);
-    lut->SetSaturationRange(1.0, 1.0);
-    lut->SetValueRange(1.0, 1.0);
-    lut->SetTableRange(0.0, 0.15);
-    lut->Build();
+    jetLut = vtkSmartPointer<vtkLookupTable>::New();
+    jetLut->SetNumberOfTableValues(256);
+    jetLut->SetTableRange(0.0, 0.15);
+    jetLut->SetHueRange(0.667, 0.0);
+    jetLut->SetSaturationRange(1.0, 1.0);
+    jetLut->SetValueRange(1.0, 1.0);
+    jetLut->SetAlphaRange(1.0, 1.0);
+    jetLut->Build();
+
+    windTunnelLut = vtkSmartPointer<vtkLookupTable>::New();
+    windTunnelLut->SetNumberOfTableValues(256);
+    windTunnelLut->SetTableRange(0.0, 0.20);
+    for (int i = 0; i < 256; ++i) {
+        double t = (double)i / 255.0;
+        double alpha = 0.0;
+        if (t > 0.04) {
+            double ramp = (t - 0.04) / (1.0 - 0.04);
+            alpha = std::min(1.0, std::pow(ramp, 1.2));
+        }
+        double val = 0.6 + 0.4 * std::min(1.0, t * 2.0);
+        windTunnelLut->SetTableValue(i, val, val, val, alpha);
+    }
+
+    neonLut = vtkSmartPointer<vtkLookupTable>::New();
+    neonLut->SetNumberOfTableValues(256);
+    neonLut->SetTableRange(0.0, 0.15);
+    neonLut->SetHueRange(0.8, 0.2);
+    neonLut->SetSaturationRange(1.0, 1.0);
+    neonLut->SetValueRange(0.8, 1.0);
+    neonLut->SetAlphaRange(1.0, 1.0);
+    neonLut->Build();
+
+    thermalLut = vtkSmartPointer<vtkLookupTable>::New();
+    thermalLut->SetNumberOfTableValues(256);
+    thermalLut->SetTableRange(0.0, 0.15);
+    thermalLut->SetHueRange(0.15, 0.0);
+    thermalLut->SetSaturationRange(1.0, 1.0);
+    thermalLut->SetValueRange(0.2, 1.0);
+    thermalLut->SetAlphaRange(1.0, 1.0);
+    thermalLut->Build();
+
+    lut = jetLut;
 
     streamMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
     streamMapper->SetInputData(streamTracer->GetOutput());
     streamMapper->SetScalarModeToUsePointFieldData();
     streamMapper->SelectColorArray("Speed");
     streamMapper->SetScalarRange(0.0, 0.15);
-    streamMapper->SetLookupTable(lut);
+    streamMapper->SetLookupTable(jetLut);
     
     streamActor = vtkSmartPointer<vtkActor>::New();
     streamActor->SetMapper(streamMapper);
     streamActor->GetProperty()->SetLineWidth(1.5);
-    streamActor->GetProperty()->SetOpacity(0.70);
+    streamActor->GetProperty()->SetOpacity(0.75);
     
     renderer->AddActor(streamActor);
     
@@ -622,9 +661,33 @@ void Simulation::updateVTKGeometry() {
     normals->SplittingOff();
     normals->Update();
     airfoilPolyData->DeepCopy(normals->GetOutput());
+
+    if (velocityField) {
+        float renderScale = 40.0f;
+        float spacing = renderScale / cachedLbmScale;
+        velocityField->SetSpacing(spacing, spacing, spacing);
+        velocityField->SetOrigin(
+            (-config.lbmGridNX / 2.0f) * spacing,
+            (-config.lbmGridNY / 2.0f) * spacing,
+            (-config.lbmGridNZ / 2.0f) * spacing
+        );
+        velocityField->Modified();
+    }
+    if (gpuAdvection) {
+        float renderScale = 40.0f;
+        float spacing = renderScale / cachedLbmScale;
+        float spreadX = (config.lbmGridNX / 2.0f) * spacing;
+        float spreadY = (config.lbmGridNY / 2.0f) * spacing;
+        float spreadZ = (config.lbmGridNZ / 2.0f) * spacing;
+        float inletX = (-config.lbmGridNX / 2.0f + 2.0f) * spacing;
+        gpuAdvection->setDomainBounds(-spreadX, -spreadY, -spreadZ, spreadX, spreadY, spreadZ);
+        gpuAdvection->setInletParams(inletX, 0.0f, spreadY * 1.9f, spreadZ * 1.9f);
+    }
+    updateStreamlineSeeds();
 }
 
 void Simulation::stepSimulation() {
+    if (isRebuilding) return;
     if (current_sim == 1 && lbmSolver) {
         
         if (!freezeFlow) {
@@ -640,7 +703,7 @@ void Simulation::stepSimulation() {
         }
         
         
-        if (showParticles && streamActor) {
+        if (!freezeFlow && showParticles && streamActor) {
             streamActor->SetVisibility(true);
             
             
@@ -674,53 +737,7 @@ void Simulation::stepSimulation() {
                 streamTracer->Update();
                 vtkSmartPointer<vtkPolyData> tracerOutput = streamTracer->GetOutput();
                 
-                {
-                    static int frameDbg = 0;
-                    if (frameDbg++ % 120 == 0) {
-                        FILE* dbgFile = fopen("filter_debug.log", "a");
-                        if (dbgFile) {
-                            fprintf(dbgFile, "[FRAME %d] showParticles=%d filterContact=%d filterPerturbed=%d pts=%lld cells=%lld\n",
-                                frameDbg, (int)showParticles, (int)filterContactLines, (int)filterUnperturbedSegments,
-                                (long long)(tracerOutput ? tracerOutput->GetNumberOfPoints() : -1),
-                                (long long)(tracerOutput ? tracerOutput->GetNumberOfCells() : -1));
-                            if (tracerOutput && tracerOutput->GetPointData()) {
-                                for (int a = 0; a < tracerOutput->GetPointData()->GetNumberOfArrays(); ++a) {
-                                    vtkDataArray* arr = tracerOutput->GetPointData()->GetArray(a);
-                                    if (arr) {
-                                        fprintf(dbgFile, "  arr[%d] name=\"%s\" comp=%d tuples=%lld\n",
-                                            a, arr->GetName() ? arr->GetName() : "NULL",
-                                            arr->GetNumberOfComponents(), (long long)arr->GetNumberOfTuples());
-                                    }
-                                }
-                            }
-                            fflush(dbgFile);
-                            fclose(dbgFile);
-                        }
-                    }
-                }
-                
-                if (filterContactLines || filterUnperturbedSegments) {
-                    static int debugCounter = 0;
-                    bool doDebug = (debugCounter++ % 60 == 0);
-                    
-                    if (doDebug && tracerOutput) {
-                        std::cout << "[FILTER-DBG] tracerOutput: pts=" << tracerOutput->GetNumberOfPoints()
-                                  << " cells=" << tracerOutput->GetNumberOfCells()
-                                  << " arrays=" << tracerOutput->GetPointData()->GetNumberOfArrays() << std::endl;
-                        for (int a = 0; a < tracerOutput->GetPointData()->GetNumberOfArrays(); ++a) {
-                            vtkDataArray* arr = tracerOutput->GetPointData()->GetArray(a);
-                            if (arr) {
-                                std::cout << "  array[" << a << "]: name=\"" << (arr->GetName() ? arr->GetName() : "NULL")
-                                          << "\" components=" << arr->GetNumberOfComponents()
-                                          << " tuples=" << arr->GetNumberOfTuples() << std::endl;
-                            }
-                        }
-                        vtkDataArray* activeVec = tracerOutput->GetPointData()->GetVectors();
-                        vtkDataArray* activeSca = tracerOutput->GetPointData()->GetScalars();
-                        std::cout << "  activeVectors=" << (activeVec ? (activeVec->GetName() ? activeVec->GetName() : "unnamed") : "NONE")
-                                  << " activeScalars=" << (activeSca ? (activeSca->GetName() ? activeSca->GetName() : "unnamed") : "NONE") << std::endl;
-                    }
-                    
+                if (currentTheme == 1) {
                     vtkDataArray* velArr = tracerOutput ? tracerOutput->GetPointData()->GetArray("Velocity") : nullptr;
                     vtkDataArray* spdArr = tracerOutput ? tracerOutput->GetPointData()->GetArray("Speed") : nullptr;
                     
@@ -728,63 +745,59 @@ void Simulation::stepSimulation() {
                         vtkSmartPointer<vtkCellArray> filteredLines = vtkSmartPointer<vtkCellArray>::New();
                         vtkSmartPointer<vtkIdList> ptIds = vtkSmartPointer<vtkIdList>::New();
                         vtkIdType numCells = tracerOutput->GetNumberOfCells();
-                        int keptLines = 0;
-                        int skippedLines = 0;
-                        float globalMaxPert = 0.0f;
+                        
+                        vtkSmartPointer<vtkFloatArray> devArr = vtkSmartPointer<vtkFloatArray>::New();
+                        devArr->SetName("Deviation");
+                        devArr->SetNumberOfTuples(tracerOutput->GetNumberOfPoints());
+                        for(vtkIdType i = 0; i < tracerOutput->GetNumberOfPoints(); ++i) {
+                            devArr->SetValue(i, 0.0f);
+                        }
+                        
+                        std::vector<float> pert;
+                        std::vector<bool> active;
+                        std::vector<bool> buf;
                         
                         for (vtkIdType c = 0; c < numCells; ++c) {
                             tracerOutput->GetCellPoints(c, ptIds);
                             vtkIdType npts = ptIds->GetNumberOfIds();
                             if (npts < 2) continue;
                             
-                            double v0[3] = {0.0, 0.0, 0.0};
-                            double s0 = 0.0;
-                            if (velArr) {
-                                velArr->GetTuple(ptIds->GetId(0), v0);
-                                s0 = std::sqrt(v0[0]*v0[0] + v0[1]*v0[1] + v0[2]*v0[2]);
-                            } else if (spdArr) {
-                                s0 = spdArr->GetTuple1(ptIds->GetId(0));
-                            }
-                            if (s0 < 1e-8) s0 = 0.05;
-
+                            pert.assign(npts, 0.0f);
                             float maxPert = 0.0f;
-                            std::vector<float> pert(npts, 0.0f);
                             for (vtkIdType i = 0; i < npts; ++i) {
                                 vtkIdType pid = ptIds->GetId(i);
                                 float pVal = 0.0f;
                                 if (velArr) {
                                     double v[3];
                                     velArr->GetTuple(pid, v);
-                                    float bend = (float)(std::sqrt(v[1]*v[1] + v[2]*v[2]) / s0);
-                                    float deficit = (float)((v0[0] - v[0]) / s0);
-                                    pVal = std::max(bend, deficit > 0.0f ? deficit : 0.0f);
-                                } else if (spdArr) {
-                                    double s = spdArr->GetTuple1(pid);
-                                    pVal = (float)((s0 - s) / s0);
-                                    if (pVal < 0.0f) pVal = 0.0f;
+                                    double speed = std::sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+                                    if (speed > 1e-6) {
+                                        double trans = std::sqrt(v[1]*v[1] + v[2]*v[2]);
+                                        pVal = (float)(trans / speed);
+                                    }
                                 }
+                                
+                                if (pVal < 0.02f) pVal = 0.0f;
                                 pert[i] = pVal;
+                                devArr->SetValue(pid, pVal);
                                 if (pVal > maxPert) maxPert = pVal;
                             }
-                            if (maxPert > globalMaxPert) globalMaxPert = maxPert;
                             
-                            bool linePerturbed = (maxPert >= 0.015f);
+                            bool linePerturbed = (maxPert >= 0.02f);
                             
-                            if (filterContactLines && !linePerturbed) {
-                                skippedLines++;
+                            if (!linePerturbed) {
                                 continue;
                             }
                             
-                            if (filterUnperturbedSegments && linePerturbed) {
-                                const float segThr = 0.012f;
-                                std::vector<bool> active(npts, false);
+                            const float segThr = 0.015f;
+                            active.assign(npts, false);
                                 for (vtkIdType i = 0; i < npts; ++i) {
                                     if (pert[i] >= segThr) active[i] = true;
                                 }
-                                std::vector<bool> buf = active;
+                                buf = active;
                                 for (vtkIdType i = 0; i < npts; ++i) {
                                     if (active[i]) {
-                                        for (int k = -15; k <= 30; ++k) {
+                                        for (int k = -12; k <= 25; ++k) {
                                             vtkIdType idx = i + k;
                                             if (idx >= 0 && idx < npts) buf[idx] = true;
                                         }
@@ -797,47 +810,39 @@ void Simulation::stepSimulation() {
                                     } else {
                                         if (seg->GetNumberOfIds() >= 2) {
                                             filteredLines->InsertNextCell(seg);
-                                            keptLines++;
                                         }
                                         seg = vtkSmartPointer<vtkIdList>::New();
                                     }
                                 }
                                 if (seg->GetNumberOfIds() >= 2) {
                                     filteredLines->InsertNextCell(seg);
-                                    keptLines++;
                                 }
-                            } else if (!filterUnperturbedSegments) {
-                                filteredLines->InsertNextCell(ptIds);
-                                keptLines++;
-                            } else {
-                                filteredLines->InsertNextCell(ptIds);
-                                keptLines++;
                             }
-                        }
                         
-                        if (doDebug) {
-                            std::cout << "[FILTER-DBG] velArr=" << (velArr ? "YES" : "NO")
-                                      << " spdArr=" << (spdArr ? "YES" : "NO")
-                                      << " cells=" << numCells
-                                      << " kept=" << keptLines
-                                      << " skipped=" << skippedLines
-                                      << " globalMaxPert=" << globalMaxPert << std::endl;
+                        tracerOutput->GetPointData()->AddArray(devArr);
+                        if (currentTheme == 1) {
+                            tracerOutput->GetPointData()->SetActiveScalars("Deviation");
+                        } else {
+                            tracerOutput->GetPointData()->SetActiveScalars("Speed");
                         }
                         
                         vtkSmartPointer<vtkPolyData> filteredData = vtkSmartPointer<vtkPolyData>::New();
                         filteredData->SetPoints(tracerOutput->GetPoints());
                         filteredData->GetPointData()->PassData(tracerOutput->GetPointData());
+                        if (currentTheme == 1) {
+                            filteredData->GetPointData()->SetActiveScalars("Deviation");
+                        } else {
+                            filteredData->GetPointData()->SetActiveScalars("Speed");
+                        }
                         filteredData->SetLines(filteredLines);
                         filteredData->Modified();
                         
                         streamMapper->SetInputData(filteredData);
-                    } else {
-                        if (doDebug) {
-                            std::cout << "[FILTER-DBG] FALLBACK: no valid arrays or cells, passing tracerOutput directly" << std::endl;
-                        }
-                        streamMapper->SetInputData(tracerOutput);
                     }
                 } else {
+                    if (tracerOutput && tracerOutput->GetPointData()) {
+                        tracerOutput->GetPointData()->SetActiveScalars("Speed");
+                    }
                     streamMapper->SetInputData(tracerOutput);
                 }
                 streamMapper->Modified();
@@ -889,7 +894,7 @@ void Simulation::updateStreamlineSeeds() {
     float spreadY = (config.lbmGridNY / 2.0f - 1.0f) * spacing;
     float spreadZ = (config.lbmGridNZ / 2.0f - 1.0f) * spacing;
     
-    float tightSpreadY = spreadY * 0.4f; 
+    float tightSpreadY = spreadY * 0.95f;
     float maxCenterY = std::max(0.0f, spreadY - tightSpreadY);
     float centerY = rakeRelY * maxCenterY;
 
@@ -987,9 +992,6 @@ void Simulation::updateStreamlineSeeds() {
         rakeSource->SetPoint2(inletX, centerY + tightSpreadY, spreadZ);
         rakeSource->Modified();
     }
-    if (renderWindow) {
-        renderWindow->Render();
-    }
 }
 
 void Simulation::resetFlow() {
@@ -1004,27 +1006,51 @@ void Simulation::resetFlow() {
 }
 
 void Simulation::setColormap(int type) {
-    if (!lut) return;
+    currentTheme = type;
+    needsVTKUpdate = true;
     
-    if (type == 0) { 
-        lut->SetHueRange(0.667, 0.0);
-        lut->SetSaturationRange(1.0, 1.0);
-        lut->SetValueRange(1.0, 1.0);
-    } else if (type == 1) { 
-        lut->SetHueRange(0.0, 0.0);
-        lut->SetSaturationRange(0.0, 0.0);
-        lut->SetValueRange(0.2, 1.0);
+    if (type == 1) { 
+        lut = windTunnelLut;
+        if (streamMapper) {
+            streamMapper->SetLookupTable(windTunnelLut);
+            streamMapper->SelectColorArray("Deviation");
+            streamMapper->SetScalarRange(0.0, 0.20);
+        }
+        if (streamActor) {
+            streamActor->GetProperty()->SetOpacity(1.0);
+        }
+    } else if (type == 0) { 
+        lut = jetLut;
+        if (streamMapper) {
+            streamMapper->SetLookupTable(jetLut);
+            streamMapper->SelectColorArray("Speed");
+            streamMapper->SetScalarRange(0.0, 0.15);
+        }
+        if (streamActor) {
+            streamActor->GetProperty()->SetOpacity(0.75);
+        }
     } else if (type == 2) { 
-        lut->SetHueRange(0.8, 0.2); 
-        lut->SetSaturationRange(1.0, 1.0);
-        lut->SetValueRange(0.5, 1.0);
+        lut = neonLut;
+        if (streamMapper) {
+            streamMapper->SetLookupTable(neonLut);
+            streamMapper->SelectColorArray("Speed");
+            streamMapper->SetScalarRange(0.0, 0.15);
+        }
+        if (streamActor) {
+            streamActor->GetProperty()->SetOpacity(0.80);
+        }
     } else if (type == 3) { 
-        lut->SetHueRange(0.667, 0.0); 
-        lut->SetSaturationRange(0.8, 0.8);
-        lut->SetValueRange(0.8, 0.8);
+        lut = thermalLut;
+        if (streamMapper) {
+            streamMapper->SetLookupTable(thermalLut);
+            streamMapper->SelectColorArray("Speed");
+            streamMapper->SetScalarRange(0.0, 0.15);
+        }
+        if (streamActor) {
+            streamActor->GetProperty()->SetOpacity(0.80);
+        }
     }
-    lut->SetTableRange(0.0, 0.15);
-    lut->Build();
+
     if (heatmapSlice) {
         heatmapSlice->GetProperty()->SetLookupTable(lut);
     }
@@ -1052,9 +1078,19 @@ void Simulation::fastUpdateRotation(double alpha) {
     auto &grid = lbmSolver->getGridModifiable();
 
     if (rotatedFoil.is3D() && rotatedFoil.getMesh3D()) {
+      double bounds[6];
+      rotatedFoil.getMesh3D()->GetBounds(bounds);
+      float offsetX = -0.15f;
+      double margin = 6.0 / (double)cachedLbmScale;
+      double minBx = bounds[0] - margin;
+      double maxBx = bounds[1] + margin;
+      double minBy = bounds[2] - margin;
+      double maxBy = bounds[3] + margin;
+      double minBz = bounds[4] - margin;
+      double maxBz = bounds[5] + margin;
+
       auto implicitDist = vtkSmartPointer<vtkImplicitPolyDataDistance>::New();
       implicitDist->SetInput(rotatedFoil.getMesh3D());
-      float offsetX = -0.15f;
 
       #pragma omp parallel for collapse(3)
       for (int z = 0; z < grid.NZ; ++z) {
@@ -1063,8 +1099,22 @@ void Simulation::fastUpdateRotation(double alpha) {
             double physX = (x - grid.NX / 2.0) / cachedLbmScale - offsetX;
             double physY = (y - grid.NY / 2.0) / cachedLbmScale;
             double physZ = (z - grid.NZ / 2.0) / cachedLbmScale;
-            double pt[3] = {physX, physY, physZ};
-            double d = implicitDist->EvaluateFunction(pt);
+
+            double d;
+            if (physX < minBx || physX > maxBx ||
+                physY < minBy || physY > maxBy ||
+                physZ < minBz || physZ > maxBz) {
+              double dx = std::max({bounds[0] - physX, 0.0, physX - bounds[1]});
+              double dy = std::max({bounds[2] - physY, 0.0, physY - bounds[3]});
+              double dz = std::max({bounds[4] - physZ, 0.0, physZ - bounds[5]});
+              d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            } else {
+              double pt[3] = {physX, physY, physZ};
+              #pragma omp critical
+              {
+                d = implicitDist->EvaluateFunction(pt);
+              }
+            }
 
             int scalarIdx = grid.getScalarIndex(x, y, z);
             float mesh_sdf = (float)(d * cachedLbmScale);

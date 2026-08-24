@@ -236,7 +236,10 @@ void Airfoil::generatePanels() {
 void Airfoil::rotateCoordinates(double angleDeg) {
     if (is3D() && mesh3D) {
         auto transform = vtkSmartPointer<vtkTransform>::New();
+        transform->PostMultiply();
+        transform->Translate(-0.25, 0.0, 0.0);
         transform->RotateZ(angleDeg);
+        transform->Translate(0.25, 0.0, 0.0);
         auto tf = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
         tf->SetInputData(mesh3D);
         tf->SetTransform(transform);
@@ -261,9 +264,12 @@ void Airfoil::rotateCoordinates(double angleDeg) {
 void Airfoil::setBaseRotation(double rx, double ry, double rz) {
     if (is3D() && originalMesh3D) {
         auto transform = vtkSmartPointer<vtkTransform>::New();
+        transform->PostMultiply();
+        transform->Translate(-0.25, 0.0, 0.0);
         transform->RotateX(rx);
         transform->RotateY(ry);
         transform->RotateZ(rz);
+        transform->Translate(0.25, 0.0, 0.0);
         
         auto tf = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
         tf->SetInputData(originalMesh3D);
