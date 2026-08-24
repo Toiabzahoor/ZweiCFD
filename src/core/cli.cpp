@@ -6,6 +6,7 @@
 #include <cmath>
 #include <algorithm>
 #include <vector>
+#include <chrono>
 
 namespace zweicfd {
 
@@ -28,6 +29,11 @@ void printHelp(const char* progName) {
     std::cout << "  --shape <idx>           Shape selector (0: NACA, 1: Cylinder, 3: Diamond)\n";
     std::cout << "  -m, --model <path>      Path to 2D/3D mesh file (.stl, .obj, .dat)\n";
     std::cout << "  --preset <name>         Preset name: naca0012, thick, flatplate, cylinder\n";
+    std::cout << "  -g, --grid <spec>       Grid resolution (e.g. 256x128x128, 256, or scale factor 2.0)\n";
+    std::cout << "  --scale <val>           Scale factor for grid resolution (e.g. 1.5, 2.0)\n";
+    std::cout << "  --nx <num>              Set grid NX dimension (default: 128)\n";
+    std::cout << "  --ny <num>              Set grid NY dimension (default: 64)\n";
+    std::cout << "  --nz <num>              Set grid NZ dimension (default: 64)\n";
     std::cout << "  --lines <num>           Streamline line count (default: 100)\n";
     std::cout << "  --rake-y <val>          Streamline rake Y offset (default: 0.0)\n";
     std::cout << "=================================================================\n";
@@ -72,6 +78,50 @@ CLIOptions parseCLI(int argc, char* argv[]) {
         } else if (arg == "--preset" && i + 1 < argc) {
             opt.preset = argv[++i];
             opt.presetSet = true;
+        } else if ((arg == "-g" || arg == "--grid" || arg == "--res") && i + 1 < argc) {
+            std::string spec = argv[++i];
+            size_t x1 = spec.find('x');
+            if (x1 == std::string::npos) x1 = spec.find('X');
+            if (x1 != std::string::npos) {
+                size_t x2 = spec.find('x', x1 + 1);
+                if (x2 == std::string::npos) x2 = spec.find('X', x1 + 1);
+                if (x2 != std::string::npos) {
+                    opt.gridNX = std::stoi(spec.substr(0, x1));
+                    opt.gridNY = std::stoi(spec.substr(x1 + 1, x2 - x1 - 1));
+                    opt.gridNZ = std::stoi(spec.substr(x2 + 1));
+                    opt.nxSet = opt.nySet = opt.nzSet = true;
+                } else {
+                    opt.gridNX = std::stoi(spec.substr(0, x1));
+                    opt.gridNY = std::stoi(spec.substr(x1 + 1));
+                    opt.gridNZ = opt.gridNY;
+                    opt.nxSet = opt.nySet = opt.nzSet = true;
+                }
+            } else {
+                try {
+                    double val = std::stod(spec);
+                    if (val <= 10.0 && val > 0.0) {
+                        opt.gridScale = val;
+                        opt.gridScaleSet = true;
+                    } else {
+                        opt.gridNX = static_cast<int>(val);
+                        opt.gridNY = std::max(8, opt.gridNX / 2);
+                        opt.gridNZ = opt.gridNY;
+                        opt.nxSet = opt.nySet = opt.nzSet = true;
+                    }
+                } catch (...) {}
+            }
+        } else if ((arg == "--scale" || arg == "--grid-scale") && i + 1 < argc) {
+            opt.gridScale = std::stod(argv[++i]);
+            opt.gridScaleSet = true;
+        } else if (arg == "--nx" && i + 1 < argc) {
+            opt.gridNX = std::stoi(argv[++i]);
+            opt.nxSet = true;
+        } else if (arg == "--ny" && i + 1 < argc) {
+            opt.gridNY = std::stoi(argv[++i]);
+            opt.nySet = true;
+        } else if (arg == "--nz" && i + 1 < argc) {
+            opt.gridNZ = std::stoi(argv[++i]);
+            opt.nzSet = true;
         } else if (arg == "--lines" && i + 1 < argc) {
             opt.lines = std::stoi(argv[++i]);
             opt.linesSet = true;
@@ -105,12 +155,22 @@ CLIOptions parseCLI(int argc, char* argv[]) {
 }
 
 int runHeadlessCLI(const CLIOptions& opt, const Config& config) {
+    auto setupStartTime = std::chrono::high_resolution_clock::now();
+
     std::cout << "\n=================================================================\n";
     std::cout << "                 ZweiCFD Headless Simulation Run                 \n";
     std::cout << "=================================================================\n";
 
     Simulation sim(0, nullptr);
     sim.config = config;
+    if (opt.nxSet && opt.gridNX > 0) sim.config.lbmGridNX = opt.gridNX;
+    if (opt.nySet && opt.gridNY > 0) sim.config.lbmGridNY = opt.gridNY;
+    if (opt.nzSet && opt.gridNZ > 0) sim.config.lbmGridNZ = opt.gridNZ;
+    if (opt.gridScaleSet && opt.gridScale > 0.0) {
+        sim.config.lbmGridNX = std::max(16, static_cast<int>(std::round(sim.config.lbmGridNX * opt.gridScale)));
+        sim.config.lbmGridNY = std::max(8, static_cast<int>(std::round(sim.config.lbmGridNY * opt.gridScale)));
+        sim.config.lbmGridNZ = std::max(8, static_cast<int>(std::round(sim.config.lbmGridNZ * opt.gridScale)));
+    }
     sim.flow.alpha = opt.alpha;
     sim.flow.V_inf = opt.speed;
     
@@ -147,7 +207,7 @@ int runHeadlessCLI(const CLIOptions& opt, const Config& config) {
     if (sim.foil.is3D()) {
         a_ref_lattice = std::max(50.0, ((double)sim.cowWidth * scale) * (std::max(0.2, (double)sim.cowHeight) * scale));
     } else {
-        a_ref_lattice = std::max(50.0, (1.0 * scale) * (double)config.lbmGridNZ);
+        a_ref_lattice = std::max(50.0, (1.0 * scale) * (double)sim.config.lbmGridNZ);
     }
     double f_dyn_lattice = 0.00125 * a_ref_lattice;
     double q_inf = 0.5 * 1.225 * sim.flow.V_inf * sim.flow.V_inf;
@@ -190,6 +250,8 @@ int runHeadlessCLI(const CLIOptions& opt, const Config& config) {
     safeLBM.V_inf = sim.flow.V_inf;
     safeLBM.kinematic_viscosity = sim.flow.kinematic_viscosity * (sim.flow.V_inf / std::max(0.0001, sim.flow.V_inf)) * sim.cachedLbmScale;
 
+    auto simStartTime = std::chrono::high_resolution_clock::now();
+
     for (int step = 1; step <= opt.steps; ++step) {
         sim.lbmSolver->step(safeLBM);
 
@@ -230,6 +292,13 @@ int runHeadlessCLI(const CLIOptions& opt, const Config& config) {
         }
     }
 
+    auto simEndTime = std::chrono::high_resolution_clock::now();
+    double setupTimeSec = std::chrono::duration<double>(simStartTime - setupStartTime).count();
+    double simTimeSec = std::chrono::duration<double>(simEndTime - simStartTime).count();
+    double totalTimeSec = std::chrono::duration<double>(simEndTime - setupStartTime).count();
+    double msPerStep = (opt.steps > 0) ? (simTimeSec * 1000.0 / opt.steps) : 0.0;
+    double mlups = (opt.steps > 0 && simTimeSec > 0.0) ? ((double)totalCells * opt.steps) / (simTimeSec * 1e6) : 0.0;
+
     double avg_cl = (sampled_count > 0) ? (sum_cl / sampled_count) : last_cl;
     double avg_cd = (sampled_count > 0) ? (sum_cd / sampled_count) : last_cd;
     double avg_ld = (std::abs(avg_cd) > 1e-6) ? (avg_cl / avg_cd) : 0.0;
@@ -251,6 +320,12 @@ int runHeadlessCLI(const CLIOptions& opt, const Config& config) {
     std::cout << "    Mean L/D Ratio        : " << std::fixed << std::setprecision(3) << avg_ld << "\n";
     std::cout << "    Mean Lift Force       : " << std::fixed << std::setprecision(2) << avg_lift_N << " N\n";
     std::cout << "    Mean Drag Force       : " << std::fixed << std::setprecision(2) << avg_drag_N << " N\n";
+    std::cout << "\n  Performance & Timing:\n";
+    std::cout << "    Setup / Voxelization  : " << std::fixed << std::setprecision(3) << setupTimeSec << " s\n";
+    std::cout << "    Simulation Steps Time : " << std::fixed << std::setprecision(3) << simTimeSec << " s\n";
+    std::cout << "    Total Elapsed Time    : " << std::fixed << std::setprecision(3) << totalTimeSec << " s\n";
+    std::cout << "    Time Per Step         : " << std::fixed << std::setprecision(2) << msPerStep << " ms/step\n";
+    std::cout << "    LBM Throughput        : " << std::fixed << std::setprecision(2) << mlups << " MLUPS (Million Lattice Updates/s)\n";
     std::cout << "=================================================================\n\n";
 
     return 0;

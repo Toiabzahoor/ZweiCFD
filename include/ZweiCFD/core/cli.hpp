@@ -22,6 +22,10 @@ struct CLIOptions {
     double rakeY = 0.0;
     int steps = 200;
     int warmup = 50;
+    int gridNX = 0;
+    int gridNY = 0;
+    int gridNZ = 0;
+    double gridScale = 0.0;
 
     bool alphaSet = false;
     bool camberSet = false;
@@ -33,6 +37,10 @@ struct CLIOptions {
     bool linesSet = false;
     bool rakeYSet = false;
     bool stepsSet = false;
+    bool nxSet = false;
+    bool nySet = false;
+    bool nzSet = false;
+    bool gridScaleSet = false;
 };
 
 CLIOptions parseCLI(int argc, char* argv[]);
