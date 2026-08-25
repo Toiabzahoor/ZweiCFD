@@ -51,6 +51,10 @@ add_executable(ZweiCFD
     include/ZweiCFD/ui/controls_dialog.hpp
     src/ui/polar_dialog.cpp
     include/ZweiCFD/ui/polar_dialog.hpp
+    src/ui/plot.cpp
+    include/ZweiCFD/ui/plot.hpp
+    src/ui/cp_dialog.cpp
+    include/ZweiCFD/ui/cp_dialog.hpp
 )
 
 find_package(Eigen3 QUIET)
@@ -82,11 +86,25 @@ else()
     find_package(OpenMP REQUIRED)
 endif()
 
+option(ENABLE_AVX2 "Enable AVX2/FMA vector extensions" OFF)
+
 target_include_directories(ZweiCFD PRIVATE
     ${VTK_INCLUDE_DIRS}
 )
 
 target_link_libraries(ZweiCFD PRIVATE ${VTK_LIBRARIES} Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets OpenMP::OpenMP_CXX Eigen3::Eigen)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(ZweiCFD PRIVATE -O3 -ffast-math -fno-finite-math-only)
+    if(ENABLE_AVX2 AND (CMAKE_SYSTEM_PROCESSOR MATCHES "amd64|x86_64|AMD64|i[3-6]86"))
+        target_compile_options(ZweiCFD PRIVATE -mavx2 -mfma)
+    endif()
+elseif(MSVC)
+    target_compile_options(ZweiCFD PRIVATE /O2 /fp:fast)
+    if(ENABLE_AVX2)
+        target_compile_options(ZweiCFD PRIVATE /arch:AVX2)
+    endif()
+endif()
 
 if(MINGW)
     target_link_options(ZweiCFD PRIVATE -static -static-libgcc -static-libstdc++)

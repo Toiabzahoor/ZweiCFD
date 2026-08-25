@@ -26,6 +26,9 @@ static void loadDummyDiamond(std::string& name, std::vector<Point2D>& coordinate
 }
 
 bool Airfoil::loadFrom2DFile(const std::string& filename) {
+    is3DModel = false;
+    mesh3D = nullptr;
+    originalMesh3D = nullptr;
     std::cout << "Loading airfoil coords from: " << filename << "...\n";
     std::ifstream file(filename);
     
@@ -280,6 +283,9 @@ void Airfoil::setBaseRotation(double rx, double ry, double rz) {
 }
 
 void Airfoil::generateNACA(double m, double p, double t, int n) {
+    is3DModel = false;
+    mesh3D = nullptr;
+    originalMesh3D = nullptr;
     std::vector<Point2D> xu, xl;
     
     for (int i = 0; i < n; ++i) {
@@ -337,9 +343,12 @@ void Airfoil::generateNACA(double m, double p, double t, int n) {
 }
 
 void Airfoil::generateCylinder(double radius, int n) {
+    is3DModel = false;
+    mesh3D = nullptr;
+    originalMesh3D = nullptr;
     coordinates.clear();
     name = "Cylinder";
-    for (int i = 0; i < n; ++i) {
+    for (int i = 0; i <= n; ++i) {
         double theta = -2.0 * M_PI * i / n;
         coordinates.push_back({0.5 + radius * std::cos(theta), radius * std::sin(theta)});
     }
@@ -347,6 +356,9 @@ void Airfoil::generateCylinder(double radius, int n) {
 }
 
 void Airfoil::generateDiamond(double thickness) {
+    is3DModel = false;
+    mesh3D = nullptr;
+    originalMesh3D = nullptr;
     coordinates.clear();
     name = "Diamond Airfoil";
     double t2 = std::max(0.01, thickness) / 2.0;
@@ -359,6 +371,9 @@ void Airfoil::generateDiamond(double thickness) {
 }
 
 void Airfoil::generateFlatPlate(double thickness) {
+    is3DModel = false;
+    mesh3D = nullptr;
+    originalMesh3D = nullptr;
     coordinates.clear();
     name = "Flat Plate";
     double t2 = std::max(0.005, thickness) / 2.0;

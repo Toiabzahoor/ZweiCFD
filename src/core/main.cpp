@@ -7,12 +7,14 @@
 #include <QMessageBox>
 #include <QDebug>
 #include <vtkAutoInit.h>
+#include <vtkOutputWindow.h>
 
 VTK_MODULE_INIT(vtkRenderingOpenGL2);
 VTK_MODULE_INIT(vtkInteractionStyle);
 VTK_MODULE_INIT(vtkRenderingVolumeOpenGL2);
 
 int main(int argc, char* argv[]) {
+    vtkOutputWindow::SetGlobalWarningDisplay(0);
     auto cliOpt = zweicfd::parseCLI(argc, argv);
 
     if (cliOpt.help) {

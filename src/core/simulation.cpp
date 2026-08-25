@@ -39,6 +39,7 @@ VTK_MODULE_INIT(vtkInteractionStyle);
 #include <vtkCamera.h>
 #include <vtkIdList.h>
 #include <vtkPolyDataNormals.h>
+#include <vtkDataObject.h>
 
 #ifdef emit
 #undef emit
@@ -248,7 +249,7 @@ void Simulation::rebuildSolverWithRotation() {
       float scaleByWidth = 0.35f * config.lbmGridNX / (float)cowWidth;
       float scaleByHeight = 0.45f * config.lbmGridNY / (float)cowHeight;
       lbmScale = std::min(scaleByWidth, scaleByHeight);
-      lbmScale = std::max(8.0f, std::min(lbmScale, 64.0f));
+      lbmScale = std::max(8.0f, std::min(lbmScale, 200.0f));
       cachedLbmScale = lbmScale;
       
       std::cout << "[SIM-LBM] Initializing Volumetric LBM Solver..." << std::endl;
@@ -336,7 +337,7 @@ void Simulation::rebuildSolverWithRotation() {
     zweicfd::Flowconditions safeLBM = solverFlow;
     safeLBM.V_inf = solverFlow.V_inf;
     safeLBM.kinematic_viscosity = solverFlow.kinematic_viscosity *
-                                  (solverFlow.V_inf / std::max(0.0001, solverFlow.V_inf));
+                                  (solverFlow.V_inf / std::max(0.0001, solverFlow.V_inf)) * cachedLbmScale;
 
     lbmSolver->getGridModifiable().initialize(safeLBM);
     std::cout << "[SIM-LBM] Starting real-time continuous LBM solver..." << std::endl;
@@ -513,6 +514,56 @@ void Simulation::setupVTKWithWindow(vtkRenderWindow* window) {
     rakeActor->GetProperty()->SetOpacity(0.5);
     rakeActor->SetVisibility(false);
     renderer->AddActor(rakeActor);
+
+    qCriterionArray = vtkSmartPointer<vtkFloatArray>::New();
+    qCriterionArray->SetNumberOfComponents(1);
+    qCriterionArray->SetNumberOfTuples(config.lbmGridNX * config.lbmGridNY * config.lbmGridNZ);
+    qCriterionArray->SetName("QCriterion");
+    for (int i = 0; i < config.lbmGridNX * config.lbmGridNY * config.lbmGridNZ; ++i) {
+        qCriterionArray->SetValue(i, 0.0f);
+    }
+    velocityField->GetPointData()->AddArray(qCriterionArray);
+
+    qContourFilter = vtkSmartPointer<vtkContourFilter>::New();
+    qContourFilter->SetInputData(velocityField);
+    qContourFilter->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_POINTS, "QCriterion");
+    qContourFilter->SetValue(0, qCritThreshold);
+
+    qSmoother = vtkSmartPointer<vtkWindowedSincPolyDataFilter>::New();
+    qSmoother->SetInputConnection(qContourFilter->GetOutputPort());
+    qSmoother->SetNumberOfIterations(15);
+    qSmoother->BoundarySmoothingOff();
+    qSmoother->FeatureEdgeSmoothingOff();
+    qSmoother->SetPassBand(0.1);
+    qSmoother->NonManifoldSmoothingOn();
+    qSmoother->NormalizeCoordinatesOn();
+
+    qNormals = vtkSmartPointer<vtkPolyDataNormals>::New();
+    qNormals->SetInputConnection(qSmoother->GetOutputPort());
+    qNormals->SetFeatureAngle(60.0);
+    qNormals->ComputePointNormalsOn();
+    qNormals->ComputeCellNormalsOff();
+    qNormals->SplittingOff();
+    qNormals->ConsistencyOn();
+    qNormals->AutoOrientNormalsOn();
+
+    qMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+    qMapper->SetInputConnection(qNormals->GetOutputPort());
+    qMapper->SetScalarModeToUsePointFieldData();
+    qMapper->SelectColorArray("Speed");
+    qMapper->SetScalarRange(0.0, 0.15);
+    qMapper->SetLookupTable(jetLut);
+
+    qActor = vtkSmartPointer<vtkActor>::New();
+    qActor->SetMapper(qMapper);
+    qActor->GetProperty()->SetOpacity(0.90);
+    qActor->GetProperty()->SetSpecular(0.65);
+    qActor->GetProperty()->SetSpecularPower(50.0);
+    qActor->GetProperty()->SetDiffuse(0.85);
+    qActor->GetProperty()->SetAmbient(0.20);
+    qActor->GetProperty()->SetInterpolationToPhong();
+    qActor->SetVisibility(false);
+    renderer->AddActor(qActor);
     
     vtkSmartPointer<vtkCylinderSource> circleSource = vtkSmartPointer<vtkCylinderSource>::New();
     circleSource->SetRadius(1.0);
@@ -703,9 +754,10 @@ void Simulation::stepSimulation() {
         }
         
         
-        if (!freezeFlow && showParticles && streamActor) {
-            streamActor->SetVisibility(true);
-            
+        if (!freezeFlow && (showParticles || showQCrit || showSurfaceCp || showHeatmap)) {
+            if (streamActor) streamActor->SetVisibility(showParticles);
+            if (qActor) qActor->SetVisibility(showQCrit);
+            if (heatmapSlice) heatmapSlice->SetVisibility(showHeatmap);
             
             if (totalLbmSteps % vtkUpdateFrequency == 0 || needsVTKUpdate) {
                 const auto& grid = lbmSolver->getGrid();
@@ -734,63 +786,73 @@ void Simulation::stepSimulation() {
                     volumeMapper->Modified();
                 }
                 
-                streamTracer->Update();
-                vtkSmartPointer<vtkPolyData> tracerOutput = streamTracer->GetOutput();
-                
-                if (currentTheme == 1) {
-                    vtkDataArray* velArr = tracerOutput ? tracerOutput->GetPointData()->GetArray("Velocity") : nullptr;
-                    vtkDataArray* spdArr = tracerOutput ? tracerOutput->GetPointData()->GetArray("Speed") : nullptr;
+                if (showParticles && streamTracer) {
+                    streamTracer->Modified();
+                    streamTracer->Update();
+                    vtkSmartPointer<vtkPolyData> tracerOutput = streamTracer->GetOutput();
                     
-                    if (tracerOutput && tracerOutput->GetNumberOfCells() > 0 && (velArr || spdArr)) {
-                        vtkSmartPointer<vtkCellArray> filteredLines = vtkSmartPointer<vtkCellArray>::New();
-                        vtkSmartPointer<vtkIdList> ptIds = vtkSmartPointer<vtkIdList>::New();
-                        vtkIdType numCells = tracerOutput->GetNumberOfCells();
+                    if (currentTheme == 1) {
+                        vtkDataArray* velArr = tracerOutput ? tracerOutput->GetPointData()->GetArray("Velocity") : nullptr;
+                        vtkDataArray* spdArr = tracerOutput ? tracerOutput->GetPointData()->GetArray("Speed") : nullptr;
                         
-                        vtkSmartPointer<vtkFloatArray> devArr = vtkSmartPointer<vtkFloatArray>::New();
-                        devArr->SetName("Deviation");
-                        devArr->SetNumberOfTuples(tracerOutput->GetNumberOfPoints());
-                        for(vtkIdType i = 0; i < tracerOutput->GetNumberOfPoints(); ++i) {
-                            devArr->SetValue(i, 0.0f);
-                        }
-                        
-                        std::vector<float> pert;
-                        std::vector<bool> active;
-                        std::vector<bool> buf;
-                        
-                        for (vtkIdType c = 0; c < numCells; ++c) {
-                            tracerOutput->GetCellPoints(c, ptIds);
-                            vtkIdType npts = ptIds->GetNumberOfIds();
-                            if (npts < 2) continue;
+                        if (tracerOutput && tracerOutput->GetNumberOfCells() > 0 && (velArr || spdArr)) {
+                            vtkSmartPointer<vtkCellArray> filteredLines = vtkSmartPointer<vtkCellArray>::New();
+                            vtkSmartPointer<vtkIdList> ptIds = vtkSmartPointer<vtkIdList>::New();
+                            vtkIdType numCells = tracerOutput->GetNumberOfCells();
                             
-                            pert.assign(npts, 0.0f);
-                            float maxPert = 0.0f;
-                            for (vtkIdType i = 0; i < npts; ++i) {
-                                vtkIdType pid = ptIds->GetId(i);
-                                float pVal = 0.0f;
-                                if (velArr) {
-                                    double v[3];
-                                    velArr->GetTuple(pid, v);
-                                    double speed = std::sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
-                                    if (speed > 1e-6) {
-                                        double trans = std::sqrt(v[1]*v[1] + v[2]*v[2]);
-                                        pVal = (float)(trans / speed);
+                            vtkSmartPointer<vtkFloatArray> devArr = vtkSmartPointer<vtkFloatArray>::New();
+                            devArr->SetName("Deviation");
+                            devArr->SetNumberOfTuples(tracerOutput->GetNumberOfPoints());
+                            for(vtkIdType i = 0; i < tracerOutput->GetNumberOfPoints(); ++i) {
+                                devArr->SetValue(i, 0.0f);
+                            }
+                            
+                            std::vector<float> pert;
+                            std::vector<bool> active;
+                            std::vector<bool> buf;
+                            
+                            for (vtkIdType c = 0; c < numCells; ++c) {
+                                tracerOutput->GetCellPoints(c, ptIds);
+                                vtkIdType npts = ptIds->GetNumberOfIds();
+                                if (npts < 2) continue;
+                                
+                                pert.assign(npts, 0.0f);
+                                float maxPert = 0.0f;
+                                for (vtkIdType i = 0; i < npts; ++i) {
+                                    vtkIdType pid = ptIds->GetId(i);
+                                    float pVal = 0.0f;
+                                    if (velArr) {
+                                        double v[3];
+                                        velArr->GetTuple(pid, v);
+                                        double speed = std::sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+                                        if (speed > 1e-6) {
+                                            double v_par = 0.0;
+                                            if (flow.windDirection == 0) v_par = v[0];
+                                            else if (flow.windDirection == 1) v_par = -v[0];
+                                            else if (flow.windDirection == 2) v_par = -v[1];
+                                            else if (flow.windDirection == 3) v_par = v[1];
+                                            
+                                            double transSq = speed * speed - v_par * v_par;
+                                            if (transSq > 0.0) {
+                                                pVal = (float)(std::sqrt(transSq) / speed);
+                                            }
+                                        }
                                     }
+                                    
+                                    if (pVal < 0.02f) pVal = 0.0f;
+                                    pert[i] = pVal;
+                                    devArr->SetValue(pid, pVal);
+                                    if (pVal > maxPert) maxPert = pVal;
                                 }
                                 
-                                if (pVal < 0.02f) pVal = 0.0f;
-                                pert[i] = pVal;
-                                devArr->SetValue(pid, pVal);
-                                if (pVal > maxPert) maxPert = pVal;
-                            }
-                            
-                            bool linePerturbed = (maxPert >= 0.02f);
-                            
-                            if (!linePerturbed) {
-                                continue;
-                            }
-                            
-                            const float segThr = 0.015f;
-                            active.assign(npts, false);
+                                bool linePerturbed = (maxPert >= 0.02f);
+                                
+                                if (!linePerturbed) {
+                                    continue;
+                                }
+                                
+                                const float segThr = 0.015f;
+                                active.assign(npts, false);
                                 for (vtkIdType i = 0; i < npts; ++i) {
                                     if (pert[i] >= segThr) active[i] = true;
                                 }
@@ -818,34 +880,112 @@ void Simulation::stepSimulation() {
                                     filteredLines->InsertNextCell(seg);
                                 }
                             }
-                        
-                        tracerOutput->GetPointData()->AddArray(devArr);
-                        if (currentTheme == 1) {
-                            tracerOutput->GetPointData()->SetActiveScalars("Deviation");
-                        } else {
+                            
+                            tracerOutput->GetPointData()->AddArray(devArr);
+                            if (currentTheme == 1) {
+                                tracerOutput->GetPointData()->SetActiveScalars("Deviation");
+                            } else {
+                                tracerOutput->GetPointData()->SetActiveScalars("Speed");
+                            }
+                            
+                            vtkSmartPointer<vtkPolyData> filteredData = vtkSmartPointer<vtkPolyData>::New();
+                            filteredData->SetPoints(tracerOutput->GetPoints());
+                            filteredData->GetPointData()->PassData(tracerOutput->GetPointData());
+                            if (currentTheme == 1) {
+                                filteredData->GetPointData()->SetActiveScalars("Deviation");
+                            } else {
+                                filteredData->GetPointData()->SetActiveScalars("Speed");
+                            }
+                            filteredData->SetLines(filteredLines);
+                            filteredData->Modified();
+                            
+                            streamMapper->SetInputData(filteredData);
+                        }
+                    } else {
+                        if (tracerOutput && tracerOutput->GetPointData()) {
                             tracerOutput->GetPointData()->SetActiveScalars("Speed");
                         }
-                        
-                        vtkSmartPointer<vtkPolyData> filteredData = vtkSmartPointer<vtkPolyData>::New();
-                        filteredData->SetPoints(tracerOutput->GetPoints());
-                        filteredData->GetPointData()->PassData(tracerOutput->GetPointData());
-                        if (currentTheme == 1) {
-                            filteredData->GetPointData()->SetActiveScalars("Deviation");
-                        } else {
-                            filteredData->GetPointData()->SetActiveScalars("Speed");
-                        }
-                        filteredData->SetLines(filteredLines);
-                        filteredData->Modified();
-                        
-                        streamMapper->SetInputData(filteredData);
+                        streamMapper->SetInputData(tracerOutput);
                     }
-                } else {
-                    if (tracerOutput && tracerOutput->GetPointData()) {
-                        tracerOutput->GetPointData()->SetActiveScalars("Speed");
-                    }
-                    streamMapper->SetInputData(tracerOutput);
+                    streamMapper->Modified();
                 }
-                streamMapper->Modified();
+
+                if (showQCrit && qCriterionArray && qContourFilter) {
+                    float* qData = qCriterionArray->WritePointer(0, totalCells);
+                    int nx = grid.NX;
+                    int ny = grid.NY;
+                    int nz = grid.NZ;
+
+                    std::vector<float> qRaw(totalCells, 0.0f);
+                    #pragma omp parallel for collapse(3) schedule(static)
+                    for (int z = 2; z < nz - 2; ++z) {
+                        for (int y = 2; y < ny - 2; ++y) {
+                            for (int x = 2; x < nx - 2; ++x) {
+                                int idx = z * (ny * nx) + y * nx + x;
+                                if (grid.sdf[idx] <= 0.0f) continue;
+
+                                int idx_xp = z * (ny * nx) + y * nx + (x + 1);
+                                int idx_xm = z * (ny * nx) + y * nx + (x - 1);
+                                int idx_yp = z * (ny * nx) + (y + 1) * nx + x;
+                                int idx_ym = z * (ny * nx) + (y - 1) * nx + x;
+                                int idx_zp = (z + 1) * (ny * nx) + y * nx + x;
+                                int idx_zm = (z - 1) * (ny * nx) + y * nx + x;
+
+                                float inv_2dx = 0.5f;
+                                float inv_2dy = 0.5f;
+                                float inv_2dz = 0.5f;
+
+                                float dux_dx = (grid.u[idx_xp].x - grid.u[idx_xm].x) * inv_2dx;
+                                float dux_dy = (grid.u[idx_yp].x - grid.u[idx_ym].x) * inv_2dy;
+                                float dux_dz = (grid.u[idx_zp].x - grid.u[idx_zm].x) * inv_2dz;
+
+                                float duy_dx = (grid.u[idx_xp].y - grid.u[idx_xm].y) * inv_2dx;
+                                float duy_dy = (grid.u[idx_yp].y - grid.u[idx_ym].y) * inv_2dy;
+                                float duy_dz = (grid.u[idx_zp].y - grid.u[idx_zm].y) * inv_2dz;
+
+                                float duz_dx = (grid.u[idx_xp].z - grid.u[idx_xm].z) * inv_2dx;
+                                float duz_dy = (grid.u[idx_yp].z - grid.u[idx_ym].z) * inv_2dy;
+                                float duz_dz = (grid.u[idx_zp].z - grid.u[idx_zm].z) * inv_2dz;
+
+                                float q_val = -0.5f * (dux_dx * dux_dx + duy_dy * duy_dy + duz_dz * duz_dz
+                                                     + 2.0f * dux_dy * duy_dx
+                                                     + 2.0f * dux_dz * duz_dx
+                                                     + 2.0f * duy_dz * duz_dy);
+                                qRaw[idx] = std::max(0.0f, q_val);
+                            }
+                        }
+                    }
+
+                    #pragma omp parallel for collapse(3) schedule(static)
+                    for (int z = 0; z < nz; ++z) {
+                        for (int y = 0; y < ny; ++y) {
+                            for (int x = 0; x < nx; ++x) {
+                                int idx = z * (ny * nx) + y * nx + x;
+                                if (x < 2 || x >= nx - 2 || y < 2 || y >= ny - 2 || z < 2 || z >= nz - 2 || grid.sdf[idx] <= 0.0f) {
+                                    qData[idx] = 0.0f;
+                                    continue;
+                                }
+
+                                int idx_xp = z * (ny * nx) + y * nx + (x + 1);
+                                int idx_xm = z * (ny * nx) + y * nx + (x - 1);
+                                int idx_yp = z * (ny * nx) + (y + 1) * nx + x;
+                                int idx_ym = z * (ny * nx) + (y - 1) * nx + x;
+                                int idx_zp = (z + 1) * (ny * nx) + y * nx + x;
+                                int idx_zm = (z - 1) * (ny * nx) + y * nx + x;
+
+                                float q_smooth = 0.5f * qRaw[idx] + (1.0f / 12.0f) * (qRaw[idx_xp] + qRaw[idx_xm] + qRaw[idx_yp] + qRaw[idx_ym] + qRaw[idx_zp] + qRaw[idx_zm]);
+                                qData[idx] = q_smooth;
+                            }
+                        }
+                    }
+
+                    qCriterionArray->Modified();
+                    velocityField->Modified();
+                    qContourFilter->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_POINTS, "QCriterion");
+                    qContourFilter->SetValue(0, qCritThreshold);
+                    qContourFilter->Modified();
+                    qContourFilter->Update();
+                }
                 
                 if (gpuAdvection) {
                     if (!gpuAdvection->isReady()) {
@@ -856,11 +996,17 @@ void Simulation::stepSimulation() {
                         gpuAdvection->stepAdvection(0.02f);
                     }
                 }
+
+                if (showSurfaceCp) {
+                    updateSurfaceCpScalars();
+                }
                 
                 needsVTKUpdate = false;
             }
-        } else if (streamActor) {
-            streamActor->SetVisibility(false);
+        } else {
+            if (streamActor) streamActor->SetVisibility(false);
+            if (qActor) qActor->SetVisibility(false);
+            if (heatmapSlice) heatmapSlice->SetVisibility(false);
         }
         
         if (heatmapSlice) {
@@ -971,16 +1117,33 @@ void Simulation::updateStreamlineSeeds() {
     vtkSmartPointer<vtkPoints> pts = vtkSmartPointer<vtkPoints>::New();
     pts->SetNumberOfPoints((vtkIdType)samplePoints.size());
 
+    float spreadX = (config.lbmGridNX / 2.0f - 1.0f) * spacing;
+    float tightSpreadX = spreadX * 0.95f;
+    float maxCenterX = std::max(0.0f, spreadX - tightSpreadX);
+    float centerX = rakeRelY * maxCenterX;
+
     for (size_t i = 0; i < samplePoints.size(); ++i) {
         float u = samplePoints[i].first;
         float v = samplePoints[i].second;
 
-        float uNorm = 2.0f * (u - 0.5f);
-        float uWarped = 0.5f + 0.5f * (0.7f * uNorm + 0.3f * uNorm * uNorm * uNorm);
-
         float px = inletX;
-        float py = (centerY - tightSpreadY) + uWarped * (2.0f * tightSpreadY);
+        float py = (centerY - tightSpreadY) + u * (2.0f * tightSpreadY);
         float pz = -spreadZ + v * (2.0f * spreadZ);
+
+        if (flow.windDirection == 1) {
+            px = (config.lbmGridNX / 2.0f - 2.0f) * spacing;
+            py = (centerY - tightSpreadY) + u * (2.0f * tightSpreadY);
+            pz = -spreadZ + v * (2.0f * spreadZ);
+        } else if (flow.windDirection == 2) {
+            px = (centerX - tightSpreadX) + u * (2.0f * tightSpreadX);
+            py = (config.lbmGridNY / 2.0f - 2.0f) * spacing;
+            pz = -spreadZ + v * (2.0f * spreadZ);
+        } else if (flow.windDirection == 3) {
+            px = (centerX - tightSpreadX) + u * (2.0f * tightSpreadX);
+            py = (-config.lbmGridNY / 2.0f + 2.0f) * spacing;
+            pz = -spreadZ + v * (2.0f * spreadZ);
+        }
+
         pts->SetPoint((vtkIdType)i, px, py, pz);
     }
 
@@ -988,10 +1151,30 @@ void Simulation::updateStreamlineSeeds() {
     streamSeeds->Modified();
 
     if (rakeSource) {
-        rakeSource->SetPoint1(inletX, centerY - tightSpreadY, -spreadZ);
-        rakeSource->SetPoint2(inletX, centerY + tightSpreadY, spreadZ);
+        if (flow.windDirection == 0) {
+            rakeSource->SetPoint1(inletX, centerY - tightSpreadY, -spreadZ);
+            rakeSource->SetPoint2(inletX, centerY + tightSpreadY, spreadZ);
+        } else if (flow.windDirection == 1) {
+            float inletX_r = (config.lbmGridNX / 2.0f - 2.0f) * spacing;
+            rakeSource->SetPoint1(inletX_r, centerY - tightSpreadY, -spreadZ);
+            rakeSource->SetPoint2(inletX_r, centerY + tightSpreadY, spreadZ);
+        } else if (flow.windDirection == 2) {
+            float inletY_top = (config.lbmGridNY / 2.0f - 2.0f) * spacing;
+            rakeSource->SetPoint1(centerX - tightSpreadX, inletY_top, -spreadZ);
+            rakeSource->SetPoint2(centerX + tightSpreadX, inletY_top, spreadZ);
+        } else if (flow.windDirection == 3) {
+            float inletY_bot = (-config.lbmGridNY / 2.0f + 2.0f) * spacing;
+            rakeSource->SetPoint1(centerX - tightSpreadX, inletY_bot, -spreadZ);
+            rakeSource->SetPoint2(centerX + tightSpreadX, inletY_bot, spreadZ);
+        }
         rakeSource->Modified();
     }
+}
+
+void Simulation::setWindDirection(int dir) {
+    flow.windDirection = dir;
+    updateStreamlineSeeds();
+    resetFlow();
 }
 
 void Simulation::resetFlow() {
@@ -1054,6 +1237,9 @@ void Simulation::setColormap(int type) {
     if (heatmapSlice) {
         heatmapSlice->GetProperty()->SetLookupTable(lut);
     }
+    if (qMapper) {
+        qMapper->SetLookupTable(lut);
+    }
     
     if (renderWindow) {
         renderWindow->Render();
@@ -1076,6 +1262,15 @@ void Simulation::fastUpdateRotation(double alpha) {
     rotatedFoil.rotateCoordinates(-alpha);
     
     auto &grid = lbmSolver->getGridModifiable();
+
+    float v_scale = 0.05f / std::max(0.0001f, (float)flow.V_inf);
+    float vx = (float)flow.V_inf * v_scale;
+    float vy = 0.0f;
+    float vz = 0.0f;
+    if (flow.windDirection == 1) vx = -vx;
+    else if (flow.windDirection == 2) { vy = -vx; vx = 0.0f; }
+    else if (flow.windDirection == 3) { vy = vx; vx = 0.0f; }
+    float usq = vx * vx + vy * vy + vz * vz;
 
     if (rotatedFoil.is3D() && rotatedFoil.getMesh3D()) {
       double bounds[6];
@@ -1123,11 +1318,10 @@ void Simulation::fastUpdateRotation(double alpha) {
             if (grid.sdf[scalarIdx] > 0.0) {
               if (grid.rho[scalarIdx] < 0.5f) {
                 grid.rho[scalarIdx] = 1.0f;
-                grid.u[scalarIdx] = {(float)flow.V_inf, 0.0f, 0.0f, 0.0f};
+                grid.u[scalarIdx] = {vx, vy, vz, 0.0f};
                 for (int q = 0; q < 19; ++q) {
-                  float cu = zweicfd::D3Q19::cx[q] * flow.V_inf;
-                  float u2 = flow.V_inf * flow.V_inf;
-                  float feq = zweicfd::D3Q19::w[q] * (1.0f + 3.0f*cu + 4.5f*cu*cu - 1.5f*u2);
+                  float cu = zweicfd::D3Q19::cx[q] * vx + zweicfd::D3Q19::cy[q] * vy + zweicfd::D3Q19::cz[q] * vz;
+                  float feq = zweicfd::D3Q19::w[q] * (1.0f + 3.0f * cu + 4.5f * cu * cu - 1.5f * usq);
                   int idxQ = grid.getIndex(x, y, z, q);
                   grid.f[idxQ] = feq;
                   grid.f_new[idxQ] = feq;
@@ -1192,11 +1386,10 @@ void Simulation::fastUpdateRotation(double alpha) {
                 if (grid.rho[scalarIdx] < 0.5f) {
                     
                     grid.rho[scalarIdx] = 1.0f;
-                    grid.u[scalarIdx] = {(float)flow.V_inf, 0.0f, 0.0f, 0.0f};
+                    grid.u[scalarIdx] = {vx, vy, vz, 0.0f};
                     for (int q = 0; q < 19; ++q) {
-                        float cu = zweicfd::D3Q19::cx[q] * flow.V_inf;
-                        float u2 = flow.V_inf * flow.V_inf;
-                        float feq = zweicfd::D3Q19::w[q] * (1.0f + 3.0f*cu + 4.5f*cu*cu - 1.5f*u2);
+                        float cu = zweicfd::D3Q19::cx[q] * vx + zweicfd::D3Q19::cy[q] * vy + zweicfd::D3Q19::cz[q] * vz;
+                        float feq = zweicfd::D3Q19::w[q] * (1.0f + 3.0f * cu + 4.5f * cu * cu - 1.5f * usq);
                         int idxQ = grid.getIndex(x, y, z, q);
                         grid.f[idxQ] = feq;
                         grid.f_new[idxQ] = feq;
@@ -1407,6 +1600,11 @@ bool Simulation::exportToVTI(const std::string& filename) {
     vortMag->SetNumberOfComponents(1);
     vortMag->SetNumberOfTuples(totalCells);
 
+    vtkSmartPointer<vtkFloatArray> qCritArr = vtkSmartPointer<vtkFloatArray>::New();
+    qCritArr->SetName("QCriterion");
+    qCritArr->SetNumberOfComponents(1);
+    qCritArr->SetNumberOfTuples(totalCells);
+
     double q_inf = 0.5 * 1.225 * flow.V_inf * flow.V_inf;
 
     #pragma omp parallel for collapse(3) schedule(static)
@@ -1445,20 +1643,31 @@ bool Simulation::exportToVTI(const std::string& filename) {
                 float inv_dy = (y_next > y_prev) ? 1.0f / ((y_next - y_prev) * (float)sp) : 0.0f;
                 float inv_dz = (z_next > z_prev) ? 1.0f / ((z_next - z_prev) * (float)sp) : 0.0f;
 
-                float duz_dy = (grid.u[idx_yp].z - grid.u[idx_ym].z) * inv_dy;
-                float duy_dz = (grid.u[idx_zp].y - grid.u[idx_zm].y) * inv_dz;
+                float dux_dx = (grid.u[idx_xp].x - grid.u[idx_xm].x) * inv_dx;
+                float dux_dy = (grid.u[idx_yp].x - grid.u[idx_ym].x) * inv_dy;
                 float dux_dz = (grid.u[idx_zp].x - grid.u[idx_zm].x) * inv_dz;
-                float duz_dx = (grid.u[idx_xp].z - grid.u[idx_xm].z) * inv_dx;
+
                 float duy_dx = (grid.u[idx_xp].y - grid.u[idx_xm].y) * inv_dx;
-                float dux_dy = (grid.u[idx_yp].x - grid.u[idx_xm].x) * inv_dy;
+                float duy_dy = (grid.u[idx_yp].y - grid.u[idx_ym].y) * inv_dy;
+                float duy_dz = (grid.u[idx_zp].y - grid.u[idx_zm].y) * inv_dz;
+
+                float duz_dx = (grid.u[idx_xp].z - grid.u[idx_xm].z) * inv_dx;
+                float duz_dy = (grid.u[idx_yp].z - grid.u[idx_ym].z) * inv_dy;
+                float duz_dz = (grid.u[idx_zp].z - grid.u[idx_zm].z) * inv_dz;
 
                 float wx = duz_dy - duy_dz;
                 float wy = dux_dz - duz_dx;
                 float wz = duy_dx - dux_dy;
                 float wmag = std::sqrt(wx * wx + wy * wy + wz * wz);
 
+                float q_val = -0.5f * (dux_dx * dux_dx + duy_dy * duy_dy + duz_dz * duz_dz
+                                     + 2.0f * dux_dy * duy_dx
+                                     + 2.0f * dux_dz * duz_dx
+                                     + 2.0f * duy_dz * duz_dy);
+
                 vort->SetTuple3(idx, wx, wy, wz);
                 vortMag->SetValue(idx, wmag);
+                qCritArr->SetValue(idx, q_val);
             }
         }
     }
@@ -1470,6 +1679,7 @@ bool Simulation::exportToVTI(const std::string& filename) {
     imageData->GetPointData()->AddArray(sdfArr);
     imageData->GetPointData()->AddArray(vort);
     imageData->GetPointData()->AddArray(vortMag);
+    imageData->GetPointData()->AddArray(qCritArr);
 
     imageData->GetPointData()->SetVectors(vel);
     imageData->GetPointData()->SetScalars(spd);
@@ -1480,6 +1690,265 @@ bool Simulation::exportToVTI(const std::string& filename) {
     writer->SetDataModeToAppended();
     writer->EncodeAppendedDataOff();
     return writer->Write() == 1;
+}
+
+CpDistribution Simulation::extractSurfaceCp() const {
+    CpDistribution dist;
+    if (!lbmSolver || isRebuilding.load()) return dist;
+
+    const auto& grid = lbmSolver->getGrid();
+    float scale = cachedLbmScale;
+    float u_lat = 0.05f;
+    float q_lat = 0.5f * 1.0f * u_lat * u_lat;
+    float offsetX = -0.15f;
+
+    const auto& panels = foil.getPanels();
+    const auto& rotatedPanels = rotatedFoil.getPanels();
+    if (panels.empty() || rotatedPanels.empty()) return dist;
+
+    dist.min_cp = 1e9;
+    dist.max_cp = -1e9;
+    double maxCpVal = -1e9;
+    double stagXc = 0.0;
+
+    size_t count = std::min(panels.size(), rotatedPanels.size());
+    for (size_t i = 0; i < count; ++i) {
+        double xc = std::clamp(panels[i].cp.x, 0.0, 1.0);
+        double rotX = rotatedPanels[i].cp.x;
+        double rotY = rotatedPanels[i].cp.y;
+        double nx = rotatedPanels[i].normal.x;
+        double ny = rotatedPanels[i].normal.y;
+
+        double sampleOffset = 1.2;
+        double physX = rotX + nx * (sampleOffset / scale);
+        double physY = rotY + ny * (sampleOffset / scale);
+
+        double gx = (physX + offsetX) * scale + grid.NX / 2.0;
+        double gy = physY * scale + grid.NY / 2.0;
+
+        int ix = std::clamp(static_cast<int>(std::round(gx)), 0, grid.NX - 1);
+        int iy = std::clamp(static_cast<int>(std::round(gy)), 0, grid.NY - 1);
+
+        double avgRho = 0.0;
+        int zSampleCount = 0;
+        int zMin = std::max(0, grid.NZ / 4);
+        int zMax = std::min(grid.NZ - 1, 3 * grid.NZ / 4);
+
+        for (int z = zMin; z <= zMax; ++z) {
+            int sIdx = grid.getScalarIndex(ix, iy, z);
+            avgRho += grid.rho[sIdx];
+            zSampleCount++;
+        }
+        if (zSampleCount > 0) avgRho /= zSampleCount;
+        else avgRho = 1.0;
+
+        double deltaP = (1.0 / 3.0) * (avgRho - 1.0);
+        double cp = deltaP / q_lat;
+
+        dist.min_cp = std::min(dist.min_cp, cp);
+        dist.max_cp = std::max(dist.max_cp, cp);
+
+        if (cp > maxCpVal) {
+            maxCpVal = cp;
+            stagXc = xc;
+        }
+
+        CpPoint pt;
+        pt.xc = xc;
+        pt.cp = cp;
+        pt.x_phys = panels[i].cp.x;
+        pt.y_phys = panels[i].cp.y;
+
+        if (panels[i].normal.y >= -1e-4) {
+            dist.upper.push_back(pt);
+        } else {
+            dist.lower.push_back(pt);
+        }
+    }
+
+    std::sort(dist.upper.begin(), dist.upper.end(), [](const CpPoint& a, const CpPoint& b) {
+        return a.xc < b.xc;
+    });
+    std::sort(dist.lower.begin(), dist.lower.end(), [](const CpPoint& a, const CpPoint& b) {
+        return a.xc < b.xc;
+    });
+
+    dist.xc_stagnation = stagXc;
+    dist.cp_stagnation = maxCpVal;
+    return dist;
+}
+
+void Simulation::setSurfaceCpVisible(bool visible) {
+    showSurfaceCp = visible;
+    if (!airfoilActor || !airfoilPolyData) return;
+
+    auto mapper = vtkPolyDataMapper::SafeDownCast(airfoilActor->GetMapper());
+    if (!mapper) return;
+
+    if (visible) {
+        updateSurfaceCpScalars();
+        mapper->ScalarVisibilityOn();
+        mapper->SetScalarRange(-3.0, 1.0);
+        if (!jetLut) {
+            jetLut = vtkSmartPointer<vtkLookupTable>::New();
+            jetLut->SetNumberOfTableValues(256);
+            jetLut->SetHueRange(0.667, 0.0);
+            jetLut->Build();
+        }
+        mapper->SetLookupTable(jetLut);
+    } else {
+        mapper->ScalarVisibilityOff();
+    }
+    if (renderWindow) renderWindow->Render();
+}
+
+void Simulation::updateSurfaceCpScalars() {
+    if (!airfoilPolyData || !lbmSolver || isRebuilding.load()) return;
+
+    const auto& grid = lbmSolver->getGrid();
+    float scale = cachedLbmScale;
+    float u_lat = 0.05f;
+    float q_lat = 0.5f * 1.0f * u_lat * u_lat;
+    float renderScale = 40.0f;
+
+    vtkPoints* pts = airfoilPolyData->GetPoints();
+    if (!pts) return;
+
+    vtkDataArray* normArr = airfoilPolyData->GetPointData()->GetNormals();
+
+    vtkIdType numPts = pts->GetNumberOfPoints();
+    vtkSmartPointer<vtkFloatArray> cpArray = vtkFloatArray::SafeDownCast(airfoilPolyData->GetPointData()->GetArray("Cp"));
+    if (!cpArray || cpArray->GetNumberOfTuples() != numPts) {
+        cpArray = vtkSmartPointer<vtkFloatArray>::New();
+        cpArray->SetName("Cp");
+        cpArray->SetNumberOfTuples(numPts);
+        airfoilPolyData->GetPointData()->AddArray(cpArray);
+        airfoilPolyData->GetPointData()->SetActiveScalars("Cp");
+    }
+
+    float sampleOffset = 1.2f;
+
+    #pragma omp parallel for schedule(static)
+    for (vtkIdType i = 0; i < numPts; ++i) {
+        double pt[3];
+        pts->GetPoint(i, pt);
+
+        double nx = 0.0, ny = 0.0, nz = 0.0;
+        if (normArr) {
+            double n[3];
+            normArr->GetTuple(i, n);
+            nx = n[0];
+            ny = n[1];
+            nz = n[2];
+        }
+
+        float gx = (float)((pt[0] / renderScale) * scale + grid.NX / 2.0f) + (float)nx * sampleOffset;
+        float gy = (float)((pt[1] / renderScale) * scale + grid.NY / 2.0f) + (float)ny * sampleOffset;
+        float gz = (float)((pt[2] / renderScale) * scale + grid.NZ / 2.0f) + (float)nz * sampleOffset;
+
+        int x0 = std::clamp((int)std::floor(gx), 0, grid.NX - 2);
+        int y0 = std::clamp((int)std::floor(gy), 0, grid.NY - 2);
+        int z0 = std::clamp((int)std::floor(gz), 0, grid.NZ - 2);
+        int x1 = x0 + 1;
+        int y1 = y0 + 1;
+        int z1 = z0 + 1;
+
+        float fx = std::clamp(gx - (float)x0, 0.0f, 1.0f);
+        float fy = std::clamp(gy - (float)y0, 0.0f, 1.0f);
+        float fz = std::clamp(gz - (float)z0, 0.0f, 1.0f);
+
+        float r000 = grid.rho[grid.getScalarIndex(x0, y0, z0)];
+        float r100 = grid.rho[grid.getScalarIndex(x1, y0, z0)];
+        float r010 = grid.rho[grid.getScalarIndex(x0, y1, z0)];
+        float r110 = grid.rho[grid.getScalarIndex(x1, y1, z0)];
+        float r001 = grid.rho[grid.getScalarIndex(x0, y0, z1)];
+        float r101 = grid.rho[grid.getScalarIndex(x1, y0, z1)];
+        float r011 = grid.rho[grid.getScalarIndex(x0, y1, z1)];
+        float r111 = grid.rho[grid.getScalarIndex(x1, y1, z1)];
+
+        float r00 = r000 * (1.0f - fx) + r100 * fx;
+        float r10 = r010 * (1.0f - fx) + r110 * fx;
+        float r01 = r001 * (1.0f - fx) + r101 * fx;
+        float r11 = r011 * (1.0f - fx) + r111 * fx;
+
+        float r0 = r00 * (1.0f - fy) + r10 * fy;
+        float r1 = r01 * (1.0f - fy) + r11 * fy;
+
+        float rhoVal = r0 * (1.0f - fz) + r1 * fz;
+
+        float deltaP = (1.0f / 3.0f) * (rhoVal - 1.0f);
+        float cp = deltaP / q_lat;
+        cpArray->SetValue(i, cp);
+    }
+    cpArray->Modified();
+}
+
+void Simulation::setQCriterionVisible(bool visible) {
+    showQCrit = visible;
+    if (qActor) {
+        qActor->SetVisibility(visible);
+    }
+    if (visible) {
+        needsVTKUpdate = true;
+    }
+    if (renderWindow) renderWindow->Render();
+}
+
+void Simulation::setQCriterionThreshold(double threshold) {
+    qCritThreshold = threshold;
+    if (qContourFilter) {
+        qContourFilter->SetValue(0, qCritThreshold);
+        if (showQCrit) {
+            qContourFilter->Modified();
+            qContourFilter->Update();
+        }
+    }
+    if (renderWindow) renderWindow->Render();
+}
+
+void Simulation::setShowParticles(bool visible) {
+    showParticles = visible;
+    if (streamActor) {
+        streamActor->SetVisibility(visible);
+    }
+    if (visible) {
+        if (streamSeeds) streamSeeds->Modified();
+        if (streamTracer) streamTracer->Modified();
+        needsVTKUpdate = true;
+    }
+    if (renderWindow) renderWindow->Render();
+}
+
+void Simulation::setGridResolution(int nx, int ny, int nz) {
+    if (nx <= 0 || ny <= 0 || nz <= 0) return;
+
+    config.lbmGridNX = nx;
+    config.lbmGridNY = ny;
+    config.lbmGridNZ = nz;
+
+    int totalCells = nx * ny * nz;
+    if (velocityField) {
+        velocityField->SetDimensions(nx, ny, nz);
+    }
+    if (velocityArray) {
+        velocityArray->SetNumberOfTuples(totalCells);
+        for (int i = 0; i < totalCells; ++i) velocityArray->SetTuple3(i, 0.0f, 0.0f, 0.0f);
+        velocityArray->Modified();
+    }
+    if (speedArray) {
+        speedArray->SetNumberOfTuples(totalCells);
+        for (int i = 0; i < totalCells; ++i) speedArray->SetValue(i, 0.0f);
+        speedArray->Modified();
+    }
+    if (qCriterionArray) {
+        qCriterionArray->SetNumberOfTuples(totalCells);
+        for (int i = 0; i < totalCells; ++i) qCriterionArray->SetValue(i, 0.0f);
+        qCriterionArray->Modified();
+    }
+
+    if (heatmapMapper) {
+        heatmapMapper->SetSliceNumber(nz / 2);
+    }
 }
 
 } 

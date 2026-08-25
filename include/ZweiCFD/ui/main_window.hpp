@@ -30,6 +30,12 @@ private slots:
     void updateSimulation();
     void openControlsDialog();
     void openPolarSweepDialog();
+    void openCpDialog();
+    void toggleSurfaceCp(bool checked);
+    void toggleQCriterion(bool checked);
+    void setWindDirection(int dir);
+    void setGridPreset(int index);
+    void openCustomGridDialog();
     void applyKeyBindings(const QMap<QString, QKeySequence>& bindings);
 
 private:
@@ -42,6 +48,8 @@ private:
     std::unique_ptr<Simulation> simulation;
     QComboBox* shapeSelector;
     QComboBox* colormapSelector;
+    QComboBox* windSelector;
+    QComboBox* gridSelector;
     QPushButton* resetViewButton;
     QLabel* scoreLabel;
     double ema_ld = 0.0;
@@ -59,6 +67,8 @@ private:
     QSlider* thicknessSlider;
     QSlider* speedSlider;
     QSlider* streamlineDensitySlider;
+    QLabel* qCritLabel = nullptr;
+    QSlider* qCritSlider = nullptr;
     QSlider* brushSizeSlider;
     QComboBox* brushShapeSelector;
     QCheckBox* particlesToggle;
@@ -73,6 +83,19 @@ private:
     QAction* dragAction = nullptr;
     QAction* alphaAction = nullptr;
     QAction* speedAction = nullptr;
+    QAction* surfaceCpAction = nullptr;
+    QAction* qCritAction = nullptr;
+    QAction* qCritLabelAction = nullptr;
+    QAction* qCritSliderAction = nullptr;
+    QAction* qCritResultAction = nullptr;
+
+    QActionGroup* windActionGroup = nullptr;
+    QAction* windLToRAction = nullptr;
+    QAction* windRToLAction = nullptr;
+    QAction* windTToBAction = nullptr;
+    QAction* windBToTAction = nullptr;
+
+    QActionGroup* gridActionGroup = nullptr;
 
     QMap<QString, QKeySequence> keyBindings;
     QVector<QShortcut*> activeShortcuts;

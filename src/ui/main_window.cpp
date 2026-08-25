@@ -1,5 +1,6 @@
 #include "ZweiCFD/ui/main_window.hpp"
 #include "ZweiCFD/ui/polar_dialog.hpp"
+#include "ZweiCFD/ui/cp_dialog.hpp"
 #include "ZweiCFD/core/cli.hpp"
 
 #include <QVTKOpenGLNativeWidget.h>
@@ -14,7 +15,11 @@
 #include <QMenu>
 #include <QFileDialog>
 #include <QAction>
+#include <QActionGroup>
 #include <QDialog>
+#include <QFormLayout>
+#include <QSpinBox>
+#include <QDialogButtonBox>
 #include <QProgressDialog>
 #include <QStatusBar>
 #include <QMessageBox>
@@ -56,10 +61,20 @@ MainWindow::MainWindow(const CLIOptions* opt, QWidget *parent) : QMainWindow(par
         );
         if (!fileName.isEmpty()) {
             if (simulation->foil.loadFromFile(fileName.toStdString())) {
+                simulation->customFoil = simulation->foil;
+                simulation->hasCustomFoil = true;
                 shapeSelector->blockSignals(true);
                 shapeSelector->setCurrentIndex(2);
                 shapeSelector->blockSignals(false);
                 
+                if (alphaSlider) {
+                    alphaSlider->blockSignals(true);
+                    alphaSlider->setValue(0);
+                    alphaSlider->blockSignals(false);
+                }
+                simulation->flow.alpha = 0.0;
+                simulation->setVisualRotation(0, 0, 0);
+
                 if (simulation->foil.is3D()) {
                     simulation->freezeFlow = true;
                     simulation->rotatedFoil = simulation->foil;
@@ -67,29 +82,34 @@ MainWindow::MainWindow(const CLIOptions* opt, QWidget *parent) : QMainWindow(par
                     
                     QDialog* dlg = new QDialog(this);
                     dlg->setWindowTitle("Set Initial Model Orientation");
+                    dlg->setWindowFlags(dlg->windowFlags() | Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
                     dlg->setAttribute(Qt::WA_DeleteOnClose);
                     dlg->setModal(false);
                     QVBoxLayout* layout = new QVBoxLayout(dlg);
                     
-                    QLabel* infoLabel = new QLabel("Adjust initial model orientation:");
+                    QLabel* infoLabel = new QLabel("Adjust model orientation to align with freestream (Left to Right):");
                     layout->addWidget(infoLabel);
                     
                     QSlider* pitchSlider = new QSlider(Qt::Horizontal);
                     pitchSlider->setRange(-180, 180);
+                    pitchSlider->setValue(0);
                     QSlider* yawSlider = new QSlider(Qt::Horizontal);
                     yawSlider->setRange(-180, 180);
+                    yawSlider->setValue(0);
                     QSlider* rollSlider = new QSlider(Qt::Horizontal);
                     rollSlider->setRange(-180, 180);
+                    rollSlider->setValue(0);
                     
-                    QLabel* pLabel = new QLabel("Pitch (X): 0");
-                    QLabel* yLabel = new QLabel("Yaw (Y): 0");
-                    QLabel* rLabel = new QLabel("Roll (Z): 0");
+                    QLabel* pLabel = new QLabel("Pitch (Z / Nose Up-Down): 0°");
+                    QLabel* yLabel = new QLabel("Yaw (Y / Turn Left-Right): 0°");
+                    QLabel* rLabel = new QLabel("Roll (X / Bank Wings): 0°");
                     
                     auto updateRotation = [this, pitchSlider, yawSlider, rollSlider, pLabel, yLabel, rLabel]() {
-                        pLabel->setText(QString("Pitch (X): %1°").arg(pitchSlider->value()));
-                        yLabel->setText(QString("Yaw (Y): %1°").arg(yawSlider->value()));
-                        rLabel->setText(QString("Roll (Z): %1°").arg(rollSlider->value()));
-                        simulation->foil.setBaseRotation(pitchSlider->value(), yawSlider->value(), rollSlider->value());
+                        pLabel->setText(QString("Pitch (Z / Nose Up-Down): %1°").arg(pitchSlider->value()));
+                        yLabel->setText(QString("Yaw (Y / Turn Left-Right): %1°").arg(yawSlider->value()));
+                        rLabel->setText(QString("Roll (X / Bank Wings): %1°").arg(rollSlider->value()));
+                        simulation->foil.setBaseRotation(rollSlider->value(), yawSlider->value(), pitchSlider->value());
+                        simulation->customFoil = simulation->foil;
                         simulation->rotatedFoil = simulation->foil;
                         simulation->updateVTKGeometry();
                         if (auto vtkRenderWidget = qobject_cast<QVTKOpenGLNativeWidget*>(centralWidget())) {
@@ -105,7 +125,39 @@ MainWindow::MainWindow(const CLIOptions* opt, QWidget *parent) : QMainWindow(par
                     layout->addWidget(yLabel); layout->addWidget(yawSlider);
                     layout->addWidget(rLabel); layout->addWidget(rollSlider);
                     
-                    QPushButton* okBtn = new QPushButton("Apply & Close");
+                    QHBoxLayout* quickBtns = new QHBoxLayout();
+                    QPushButton* p90Btn = new QPushButton("+90° Pitch", dlg);
+                    connect(p90Btn, &QPushButton::clicked, [pitchSlider]() {
+                        int v = pitchSlider->value() + 90;
+                        if (v > 180) v -= 360;
+                        pitchSlider->setValue(v);
+                    });
+                    QPushButton* y90Btn = new QPushButton("+90° Yaw", dlg);
+                    connect(y90Btn, &QPushButton::clicked, [yawSlider]() {
+                        int v = yawSlider->value() + 90;
+                        if (v > 180) v -= 360;
+                        yawSlider->setValue(v);
+                    });
+                    QPushButton* r90Btn = new QPushButton("+90° Roll", dlg);
+                    connect(r90Btn, &QPushButton::clicked, [rollSlider]() {
+                        int v = rollSlider->value() + 90;
+                        if (v > 180) v -= 360;
+                        rollSlider->setValue(v);
+                    });
+                    QPushButton* rstBtn = new QPushButton("Reset", dlg);
+                    connect(rstBtn, &QPushButton::clicked, [pitchSlider, yawSlider, rollSlider]() {
+                        pitchSlider->setValue(0);
+                        yawSlider->setValue(0);
+                        rollSlider->setValue(0);
+                    });
+                    quickBtns->addWidget(p90Btn);
+                    quickBtns->addWidget(y90Btn);
+                    quickBtns->addWidget(r90Btn);
+                    quickBtns->addWidget(rstBtn);
+                    layout->addLayout(quickBtns);
+
+                    QPushButton* okBtn = new QPushButton("Apply & Start Simulation", dlg);
+                    okBtn->setStyleSheet("QPushButton { font-weight: bold; padding: 6px; }");
                     connect(okBtn, &QPushButton::clicked, dlg, &QDialog::accept);
                     connect(dlg, &QDialog::finished, this, [this]() {
                         updateMorphing();
@@ -116,9 +168,7 @@ MainWindow::MainWindow(const CLIOptions* opt, QWidget *parent) : QMainWindow(par
                     dlg->show();
                     dlg->move(this->x() + 50, this->y() + 100);
                 } else {
-                    simulation->rebuildSolverWithRotation();
-                    simulation->freezeFlow = false;
-                    simulation->updateVTKGeometry();
+                    updateMorphing();
                 }
             }
         }
@@ -197,6 +247,62 @@ MainWindow::MainWindow(const CLIOptions* opt, QWidget *parent) : QMainWindow(par
         if (simulation) simulation->clearDrawing();
     });
 
+    QMenu* windMenu = menuBar->addMenu("&Wind");
+    windActionGroup = new QActionGroup(this);
+    windActionGroup->setExclusive(true);
+
+    windLToRAction = windMenu->addAction("Left to Right (Headwind)");
+    windLToRAction->setCheckable(true);
+    windLToRAction->setChecked(true);
+    windLToRAction->setData(0);
+    windActionGroup->addAction(windLToRAction);
+
+    windRToLAction = windMenu->addAction("Right to Left (Tailwind)");
+    windRToLAction->setCheckable(true);
+    windRToLAction->setData(1);
+    windActionGroup->addAction(windRToLAction);
+
+    windTToBAction = windMenu->addAction("Top to Bottom (Downdraft)");
+    windTToBAction->setCheckable(true);
+    windTToBAction->setData(2);
+    windActionGroup->addAction(windTToBAction);
+
+    windBToTAction = windMenu->addAction("Bottom to Top (Updraft)");
+    windBToTAction->setCheckable(true);
+    windBToTAction->setData(3);
+    windActionGroup->addAction(windBToTAction);
+
+    connect(windActionGroup, &QActionGroup::triggered, this, [this](QAction* act) {
+        if (act) setWindDirection(act->data().toInt());
+    });
+
+    QMenu* gridMenu = menuBar->addMenu("&Grid");
+    gridActionGroup = new QActionGroup(this);
+    gridActionGroup->setExclusive(true);
+
+    auto addGridAct = [&](const QString& name, int idx, bool checked = false) {
+        QAction* act = gridMenu->addAction(name);
+        act->setCheckable(true);
+        act->setChecked(checked);
+        act->setData(idx);
+        gridActionGroup->addAction(act);
+        return act;
+    };
+
+    addGridAct("64 x 32 x 32 (Fast - 65k cells)", 0);
+    addGridAct("96 x 48 x 48 (Balanced - 221k cells)", 1);
+    addGridAct("128 x 64 x 64 (Default - 524k cells)", 2, true);
+    addGridAct("160 x 80 x 80 (High Res - 1.02M cells)", 3);
+    addGridAct("192 x 96 x 96 (Extreme - 1.77M cells)", 4);
+
+    connect(gridActionGroup, &QActionGroup::triggered, this, [this](QAction* act) {
+        if (act) setGridPreset(act->data().toInt());
+    });
+
+    gridMenu->addSeparator();
+    QAction* customGridAct = gridMenu->addAction("&Custom Grid Resolution...");
+    connect(customGridAct, &QAction::triggered, this, &MainWindow::openCustomGridDialog);
+
     QMenu* controlsMenu = menuBar->addMenu("&Controls");
     QAction* configKeysAction = controlsMenu->addAction("&Configure Keybindings...");
     connect(configKeysAction, &QAction::triggered, this, &MainWindow::openControlsDialog);
@@ -211,6 +317,23 @@ MainWindow::MainWindow(const CLIOptions* opt, QWidget *parent) : QMainWindow(par
     });
 
     QMenu* toolsMenu = menuBar->addMenu("&Tools");
+    QAction* cpAction = toolsMenu->addAction("Surface Pressure &Distribution (Cp Curve)...");
+    cpAction->setShortcut(QKeySequence("Ctrl+C"));
+    connect(cpAction, &QAction::triggered, this, &MainWindow::openCpDialog);
+
+    surfaceCpAction = toolsMenu->addAction("3D Surface Cp Colormap on &Mesh");
+    surfaceCpAction->setCheckable(true);
+    surfaceCpAction->setChecked(false);
+    connect(surfaceCpAction, &QAction::toggled, this, &MainWindow::toggleSurfaceCp);
+
+    qCritAction = toolsMenu->addAction("3D &Vortex Cores (Q-Criterion)");
+    qCritAction->setCheckable(true);
+    qCritAction->setChecked(false);
+    qCritAction->setShortcut(QKeySequence("Ctrl+Q"));
+    connect(qCritAction, &QAction::toggled, this, &MainWindow::toggleQCriterion);
+
+    toolsMenu->addSeparator();
+
     QAction* polarAction = toolsMenu->addAction("&Run Polar Sweep (Alpha Sweep)...");
     polarAction->setShortcut(QKeySequence("Ctrl+P"));
     connect(polarAction, &QAction::triggered, this, &MainWindow::openPolarSweepDialog);
@@ -225,6 +348,7 @@ MainWindow::MainWindow(const CLIOptions* opt, QWidget *parent) : QMainWindow(par
     resultsMenu->addSeparator();
     alphaAction = resultsMenu->addAction("Angle of Attack: 0.0°");
     speedAction = resultsMenu->addAction("Airspeed: 10.0 m/s");
+    qCritResultAction = resultsMenu->addAction("Q-Crit Threshold: 2.10e-05 s^-2 (Sensitivity: 20%)");
 
     setupUi(opt);
     setupShortcuts();
@@ -252,6 +376,10 @@ void MainWindow::updateMorphing() {
         simulation->foil.generateNACA(m, p, t);
     } else if (shapeIdx == 1) {
         simulation->foil.generateCylinder(0.25, 100);
+    } else if (shapeIdx == 2) {
+        if (simulation->hasCustomFoil) {
+            simulation->foil = simulation->customFoil;
+        }
     } else if (shapeIdx == 3) {
         simulation->foil.generateCylinder(0.001, 3);
     }
@@ -261,6 +389,7 @@ void MainWindow::updateMorphing() {
         simulation->rebuildSolverWithRotation();
         simulation->freezeFlow = false;
         simulation->updateVTKGeometry();
+        simulation->updateStreamlineSeeds();
         simulation->isRebuilding = false;
         return;
     }
@@ -280,6 +409,7 @@ void MainWindow::updateMorphing() {
         watcher->deleteLater();
         simulation->freezeFlow = false;
         simulation->updateVTKGeometry();
+        simulation->updateStreamlineSeeds();
         simulation->isRebuilding = false;
         if (simTimer) simTimer->start(22);
         if (auto vtkRenderWidget = qobject_cast<QVTKOpenGLNativeWidget*>(centralWidget())) {
@@ -307,6 +437,17 @@ void MainWindow::setupUi(const CLIOptions* opt) {
     colormapSelector = new QComboBox(this);
     colormapSelector->addItems({"Jet", "Wind Tunnel", "Neon", "Thermal"});
     topBar->addWidget(colormapSelector);
+
+    topBar->addWidget(new QLabel(" Wind: "));
+    windSelector = new QComboBox(this);
+    windSelector->addItems({"Left -> Right", "Right -> Left", "Top -> Bottom", "Bottom -> Top"});
+    topBar->addWidget(windSelector);
+
+    topBar->addWidget(new QLabel(" Grid: "));
+    gridSelector = new QComboBox(this);
+    gridSelector->addItems({"64x32 (Fast)", "96x48 (Medium)", "128x64 (Default)", "160x80 (High)", "192x96 (Ultra)"});
+    gridSelector->setCurrentIndex(2);
+    topBar->addWidget(gridSelector);
     
     resetViewButton = new QPushButton(" ⟳ Reset View ", this);
     resetViewButton->setStyleSheet("QPushButton { font-weight: bold; color: white; background-color: #5cb85c; border-radius: 4px; padding: 4px; } QPushButton:hover { background-color: #449d44; }");
@@ -316,7 +457,7 @@ void MainWindow::setupUi(const CLIOptions* opt) {
 
     topBar->addWidget(new QLabel(" Display: "));
     displayModeSelector = new QComboBox(this);
-    displayModeSelector->addItems({"Streamlines", "Velocity Heatmap"});
+    displayModeSelector->addItems({"Streamlines", "3D Vortex Cores (Q-Crit)", "Streamlines + Vortex Cores"});
     topBar->addWidget(displayModeSelector);
 
     scoreLabel = new QLabel(" L/D: --- ", this);
@@ -375,6 +516,17 @@ void MainWindow::setupUi(const CLIOptions* opt) {
     streamlineDensitySlider->setValue(100);
     streamlineDensitySlider->setFixedWidth(70);
     toolbar->addWidget(streamlineDensitySlider);
+
+    qCritLabel = new QLabel(" Q-Crit: ");
+    qCritLabelAction = toolbar->addWidget(qCritLabel);
+    qCritSlider = new QSlider(Qt::Horizontal);
+    qCritSlider->setRange(1, 100);
+    qCritSlider->setValue(20);
+    qCritSlider->setFixedWidth(70);
+    qCritSlider->setToolTip("Q-Criterion Vortex Core Sensitivity Threshold");
+    qCritSliderAction = toolbar->addWidget(qCritSlider);
+    if (qCritLabelAction) qCritLabelAction->setVisible(false);
+    if (qCritSliderAction) qCritSliderAction->setVisible(false);
     
     toolbar->addSeparator();
 
@@ -433,13 +585,15 @@ void MainWindow::setupUi(const CLIOptions* opt) {
         }
     });
 
+    connect(windSelector, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::setWindDirection);
+    connect(gridSelector, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::setGridPreset);
+
     connect(resetViewButton, &QPushButton::clicked, [this]() {
         if (simulation) {
             alphaSlider->setValue(0);
             rakeYSlider->setValue(0);
-            updateMorphing();
             simulation->resetCameraView();
-            simulation->resetFlow();
+            updateMorphing();
         }
     });
 
@@ -462,8 +616,7 @@ void MainWindow::setupUi(const CLIOptions* opt) {
     connect(speedSlider, &QSlider::valueChanged, [this](int value) {
         simulation->flow.V_inf = static_cast<double>(value) * 5.0;
         simulation->stepsPerFrame = std::clamp(value, 1, 8);
-    });
-    connect(speedSlider, &QSlider::sliderReleased, [this]() {
+        simulation->needsVTKUpdate = true;
         simulation->resetFlow();
     });
     
@@ -479,7 +632,7 @@ void MainWindow::setupUi(const CLIOptions* opt) {
 
     connect(particlesToggle, &QCheckBox::toggled, this, [this](bool checked) {
         if (simulation) {
-            simulation->showParticles = checked;
+            simulation->setShowParticles(checked);
         }
     });
     
@@ -491,8 +644,37 @@ void MainWindow::setupUi(const CLIOptions* opt) {
     
     connect(displayModeSelector, QOverload<int>::of(&QComboBox::currentIndexChanged), [this](int index) {
         if (simulation) {
-            simulation->showParticles = (index == 0);
-            simulation->showHeatmap = (index == 1);
+            if (index == 0) {
+                simulation->setShowParticles(true);
+                simulation->showHeatmap = false;
+                toggleQCriterion(false);
+                particlesToggle->setChecked(true);
+            } else if (index == 1) {
+                simulation->setShowParticles(false);
+                simulation->showHeatmap = false;
+                toggleQCriterion(true);
+                particlesToggle->setChecked(false);
+            } else if (index == 2) {
+                simulation->setShowParticles(true);
+                simulation->showHeatmap = false;
+                toggleQCriterion(true);
+                particlesToggle->setChecked(true);
+            }
+        }
+    });
+
+    connect(qCritSlider, &QSlider::valueChanged, this, [this](int value) {
+        if (simulation) {
+            double thresh = 1.0e-5 * std::pow(50.0, (double)(value - 1) / 99.0);
+            simulation->setQCriterionThreshold(thresh);
+            qCritSlider->setToolTip(QString("Q-Criterion Sensitivity: %1% (Threshold: %2 s^-2)")
+                .arg(value)
+                .arg(thresh, 0, 'e', 2));
+            if (qCritResultAction) {
+                qCritResultAction->setText(QString("Q-Crit Threshold: %1 s^-2 (Sensitivity: %2%)")
+                    .arg(thresh, 0, 'e', 2)
+                    .arg(value));
+            }
         }
     });
     
@@ -709,6 +891,11 @@ void MainWindow::updateSimulation() {
             if (dragAction) dragAction->setText(QString("Drag Force: %1 N").arg(ema_drag, 0, 'f', 2));
             if (alphaAction) alphaAction->setText(QString("Angle of Attack: %1°").arg(simulation->flow.alpha, 0, 'f', 1));
             if (speedAction) speedAction->setText(QString("Airspeed: %1 m/s").arg(simulation->flow.V_inf, 0, 'f', 1));
+            if (qCritResultAction && qCritSlider) {
+                qCritResultAction->setText(QString("Q-Crit Threshold: %1 s^-2 (Sensitivity: %2%)")
+                    .arg(simulation->qCritThreshold, 0, 'e', 2)
+                    .arg(qCritSlider->value()));
+            }
         }
     }
 
@@ -729,6 +916,124 @@ void MainWindow::setDrawingMode(bool enabled) {
     if (brushToolbar) brushToolbar->setVisible(enabled);
     if (drawModeAction) {
         drawModeAction->setText(enabled ? "&Exit Drawing Mode" : "&Start Drawing Mode");
+    }
+}
+
+void MainWindow::openCpDialog() {
+    auto* dlg = new CpDialog(simulation.get(), this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->show();
+}
+
+void MainWindow::toggleSurfaceCp(bool checked) {
+    if (simulation) {
+        simulation->setSurfaceCpVisible(checked);
+    }
+}
+
+void MainWindow::toggleQCriterion(bool checked) {
+    if (simulation) {
+        simulation->setQCriterionVisible(checked);
+    }
+    if (qCritAction && qCritAction->isChecked() != checked) {
+        qCritAction->blockSignals(true);
+        qCritAction->setChecked(checked);
+        qCritAction->blockSignals(false);
+    }
+    if (qCritLabelAction) qCritLabelAction->setVisible(checked);
+    if (qCritSliderAction) qCritSliderAction->setVisible(checked);
+}
+
+void MainWindow::setWindDirection(int dir) {
+    if (simulation) {
+        simulation->setWindDirection(dir);
+    }
+    if (windSelector && windSelector->currentIndex() != dir) {
+        windSelector->blockSignals(true);
+        windSelector->setCurrentIndex(dir);
+        windSelector->blockSignals(false);
+    }
+    if (windActionGroup) {
+        auto actions = windActionGroup->actions();
+        if (dir >= 0 && dir < actions.size() && !actions[dir]->isChecked()) {
+            actions[dir]->blockSignals(true);
+            actions[dir]->setChecked(true);
+            actions[dir]->blockSignals(false);
+        }
+    }
+}
+
+void MainWindow::setGridPreset(int index) {
+    if (!simulation) return;
+    int nx = 128, ny = 64, nz = 64;
+    switch (index) {
+        case 0: nx = 64;  ny = 32; nz = 32; break;
+        case 1: nx = 96;  ny = 48; nz = 48; break;
+        case 2: nx = 128; ny = 64; nz = 64; break;
+        case 3: nx = 160; ny = 80; nz = 80; break;
+        case 4: nx = 192; ny = 96; nz = 96; break;
+        default: return;
+    }
+    simulation->setGridResolution(nx, ny, nz);
+
+    if (gridSelector && gridSelector->currentIndex() != index) {
+        gridSelector->blockSignals(true);
+        gridSelector->setCurrentIndex(index);
+        gridSelector->blockSignals(false);
+    }
+    if (gridActionGroup) {
+        auto acts = gridActionGroup->actions();
+        if (index >= 0 && index < acts.size() && !acts[index]->isChecked()) {
+            acts[index]->blockSignals(true);
+            acts[index]->setChecked(true);
+            acts[index]->blockSignals(false);
+        }
+    }
+    updateMorphing();
+}
+
+void MainWindow::openCustomGridDialog() {
+    if (!simulation) return;
+    QDialog dlg(this);
+    dlg.setWindowTitle("Custom LBM Grid Resolution");
+    dlg.setWindowFlags(dlg.windowFlags() | Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
+    dlg.setMinimumWidth(320);
+
+    auto layout = new QVBoxLayout(&dlg);
+    auto form = new QFormLayout();
+
+    auto nxSpin = new QSpinBox(&dlg);
+    nxSpin->setRange(16, 512);
+    nxSpin->setSingleStep(16);
+    nxSpin->setValue(simulation->config.lbmGridNX);
+
+    auto nySpin = new QSpinBox(&dlg);
+    nySpin->setRange(16, 256);
+    nySpin->setSingleStep(16);
+    nySpin->setValue(simulation->config.lbmGridNY);
+
+    auto nzSpin = new QSpinBox(&dlg);
+    nzSpin->setRange(16, 256);
+    nzSpin->setSingleStep(16);
+    nzSpin->setValue(simulation->config.lbmGridNZ);
+
+    form->addRow("Grid NX (Length):", nxSpin);
+    form->addRow("Grid NY (Height):", nySpin);
+    form->addRow("Grid NZ (Depth):", nzSpin);
+
+    layout->addLayout(form);
+
+    auto btnBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    layout->addWidget(btnBox);
+    connect(btnBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(btnBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+    if (dlg.exec() == QDialog::Accepted) {
+        int nx = nxSpin->value();
+        int ny = nySpin->value();
+        int nz = nzSpin->value();
+        simulation->setGridResolution(nx, ny, nz);
+        updateMorphing();
     }
 }
 

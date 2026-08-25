@@ -39,8 +39,27 @@
 #include <vtkLineSource.h>
 #include <vtkLinearExtrusionFilter.h>
 #include <vtkPolygon.h>
+#include <vtkContourFilter.h>
+#include <vtkWindowedSincPolyDataFilter.h>
+#include <vtkPolyDataNormals.h>
 
 namespace zweicfd {
+
+struct CpPoint {
+  double xc = 0.0;
+  double cp = 0.0;
+  double x_phys = 0.0;
+  double y_phys = 0.0;
+};
+
+struct CpDistribution {
+  std::vector<CpPoint> upper;
+  std::vector<CpPoint> lower;
+  double min_cp = 0.0;
+  double max_cp = 0.0;
+  double xc_stagnation = 0.0;
+  double cp_stagnation = 0.0;
+};
 
 class Simulation {
 public:
@@ -55,6 +74,10 @@ public:
   void stepSimulation();
   void resetFlow();
   void setColormap(int type);
+  void setWindDirection(int dir);
+  int getWindDirection() const { return flow.windDirection; }
+  void setShowParticles(bool visible);
+  void setGridResolution(int nx, int ny, int nz);
   
   void fastUpdateRotation(double alpha);
   void setVisualRotation(double rx, double ry, double rz);
@@ -67,12 +90,24 @@ public:
   void setLineWidth(float width);
   float getLineWidth() const;
   bool exportToVTI(const std::string& filename);
+
+  CpDistribution extractSurfaceCp() const;
+  void setSurfaceCpVisible(bool visible);
+  bool isSurfaceCpVisible() const { return showSurfaceCp; }
+  void updateSurfaceCpScalars();
+
+  void setQCriterionVisible(bool visible);
+  bool isQCriterionVisible() const { return showQCrit; }
+  void setQCriterionThreshold(double threshold);
+  double getQCriterionThreshold() const { return qCritThreshold; }
   
   vtkRenderWindow* getRenderWindow() const { return renderWindow; }
 
   zweicfd::Config config;
   zweicfd::Airfoil foil;
   zweicfd::Airfoil rotatedFoil;
+  zweicfd::Airfoil customFoil;
+  bool hasCustomFoil = false;
   zweicfd::Flowconditions flow;
 
   std::unique_ptr<zweicfd::Solver> solver;
@@ -85,13 +120,15 @@ public:
   float cowWidth = 1.0f;
   float cowHeight = 1.0f;
   
-  
   int stepsPerFrame = 1;
   int vtkUpdateFrequency = 1;
   int totalLbmSteps = 0;
   
   bool showParticles = true;
   bool showHeatmap = false;
+  bool showSurfaceCp = false;
+  bool showQCrit = false;
+  double qCritThreshold = 1.0e-5;
   bool drawMode = false;
   bool isEraser = false;
   float brushSize = 3.0f;
@@ -133,6 +170,13 @@ private:
   vtkSmartPointer<vtkStreamTracer> streamTracer;
   vtkSmartPointer<vtkPolyDataMapper> streamMapper;
   vtkSmartPointer<vtkActor> streamActor;
+  
+  vtkSmartPointer<vtkFloatArray> qCriterionArray;
+  vtkSmartPointer<vtkContourFilter> qContourFilter;
+  vtkSmartPointer<vtkWindowedSincPolyDataFilter> qSmoother;
+  vtkSmartPointer<vtkPolyDataNormals> qNormals;
+  vtkSmartPointer<vtkPolyDataMapper> qMapper;
+  vtkSmartPointer<vtkActor> qActor;
   
   vtkSmartPointer<vtkPoints> drawnPoints[3];
   vtkSmartPointer<vtkPolyData> drawnPolyData[3];

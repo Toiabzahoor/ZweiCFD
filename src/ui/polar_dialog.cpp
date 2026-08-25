@@ -1,4 +1,5 @@
 #include "ZweiCFD/ui/polar_dialog.hpp"
+#include "ZweiCFD/ui/plot.hpp"
 #include "ZweiCFD/solver/lbm_solver.hpp"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -7,6 +8,7 @@
 #include <QHeaderView>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QComboBox>
 #include <fstream>
 #include <iomanip>
 #include <cmath>
@@ -265,29 +267,41 @@ PolarDialog::~PolarDialog() {
 }
 
 void PolarDialog::setupUi() {
-    setWindowTitle("Automated Polar Sweep (Alpha Sweep)");
-    resize(700, 580);
+    setWindowTitle("Automated Polar Sweep (Alpha Sweep & Graphical Polars)");
+    setWindowFlags(windowFlags() | Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
+    resize(760, 580);
+    setMinimumSize(560, 420);
     setStyleSheet("QDialog { background-color: #1e1e24; color: #f0f0f0; }"
-                  "QGroupBox { font-weight: bold; border: 1px solid #3a3a4c; border-radius: 6px; margin-top: 10px; padding-top: 12px; color: #e0e0e0; }"
+                  "QGroupBox { font-weight: bold; border: 1px solid #3a3a4c; border-radius: 6px; margin-top: 6px; padding-top: 10px; color: #e0e0e0; }"
                   "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
                   "QLabel { color: #dcdcdc; }"
-                  "QSpinBox, QDoubleSpinBox, QLineEdit { background-color: #2b2b36; border: 1px solid #44445a; border-radius: 4px; padding: 4px; color: #ffffff; }"
-                  "QPushButton { background-color: #3b4252; color: #eceff4; border: 1px solid #4c566a; border-radius: 4px; padding: 6px 14px; font-weight: bold; }"
+                  "QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox { background-color: #2b2b36; border: 1px solid #44445a; border-radius: 4px; padding: 3px; color: #ffffff; }"
+                  "QComboBox QAbstractItemView { background-color: #2b2b36; color: #ffffff; selection-background-color: #5e81ac; }"
+                  "QPushButton { background-color: #3b4252; color: #eceff4; border: 1px solid #4c566a; border-radius: 4px; padding: 5px 12px; font-weight: bold; }"
                   "QPushButton:hover { background-color: #434c5e; }"
                   "QPushButton:pressed { background-color: #2e3440; }"
                   "QPushButton#startBtn { background-color: #2e7d32; border: 1px solid #388e3c; color: white; }"
                   "QPushButton#startBtn:hover { background-color: #388e3c; }"
                   "QPushButton#cancelBtn { background-color: #c62828; border: 1px solid #d32f2f; color: white; }"
                   "QPushButton#cancelBtn:hover { background-color: #d32f2f; }"
-                  "QTableWidget { background-color: #23232d; alternate-background-color: #2a2a37; border: 1px solid #3a3a4c; color: #ffffff; gridline-color: #3a3a4c; }"
-                  "QHeaderView::section { background-color: #1a1a20; color: #88c0d0; padding: 4px; border: 1px solid #3a3a4c; font-weight: bold; }"
-                  "QProgressBar { border: 1px solid #44445a; border-radius: 4px; text-align: center; color: white; background-color: #2b2b36; }"
+                  "QTabWidget::pane { border: 1px solid #3a3a4c; background-color: #1a1a22; border-radius: 4px; }"
+                  "QTabBar::tab { background-color: #252532; color: #a0a0b8; padding: 6px 14px; border: 1px solid #3a3a4c; border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; font-weight: bold; margin-right: 2px; }"
+                  "QTabBar::tab:selected { background-color: #1a1a22; color: #88c0d0; border-top: 2px solid #88c0d0; }"
+                  "QTabBar::tab:hover { background-color: #2f2f40; color: #ffffff; }"
+                  "QTableWidget { background-color: #1e1e28; alternate-background-color: #242432; border: 1px solid #3a3a4c; color: #ffffff; gridline-color: #3a3a4c; }"
+                  "QHeaderView::section { background-color: #16161e; color: #88c0d0; padding: 4px; border: 1px solid #3a3a4c; font-weight: bold; }"
+                  "QProgressBar { border: 1px solid #44445a; border-radius: 4px; text-align: center; color: white; background-color: #2b2b36; height: 16px; }"
                   "QProgressBar::chunk { background-color: #5e81ac; border-radius: 3px; }");
 
     auto* mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(10, 10, 10, 10);
+    mainLayout->setSpacing(6);
 
     auto* configBox = new QGroupBox("Sweep Range & Solver Parameters", this);
     auto* gridLayout = new QGridLayout(configBox);
+    gridLayout->setContentsMargins(8, 8, 8, 8);
+    gridLayout->setVerticalSpacing(4);
+    gridLayout->setHorizontalSpacing(8);
 
     gridLayout->addWidget(new QLabel("Min Alpha (°):"), 0, 0);
     alphaMinSpin = new QDoubleSpinBox(this);
@@ -336,12 +350,12 @@ void PolarDialog::setupUi() {
     mainLayout->addWidget(configBox);
 
     auto* btnLayout = new QHBoxLayout();
-    startButton = new QPushButton("▶ Start Polar Sweep", this);
+    startButton = new QPushButton("Run Polar Sweep", this);
     startButton->setObjectName("startBtn");
     connect(startButton, &QPushButton::clicked, this, &PolarDialog::onStartSweep);
     btnLayout->addWidget(startButton);
 
-    cancelButton = new QPushButton("⏹ Cancel", this);
+    cancelButton = new QPushButton("Stop Sweep", this);
     cancelButton->setObjectName("cancelBtn");
     cancelButton->setEnabled(false);
     connect(cancelButton, &QPushButton::clicked, this, &PolarDialog::onCancelSweep);
@@ -362,18 +376,103 @@ void PolarDialog::setupUi() {
     statusLabel->setStyleSheet("color: #88c0d0; font-weight: bold;");
     mainLayout->addWidget(statusLabel);
 
+    auto* tabWidget = new QTabWidget(this);
+
+    auto* plotTab = new QWidget(this);
+    auto* plotTabLayout = new QVBoxLayout(plotTab);
+    plotTabLayout->setContentsMargins(6, 6, 6, 6);
+    plotTabLayout->setSpacing(6);
+
+    auto* plotControlLayout = new QHBoxLayout();
+    plotControlLayout->addWidget(new QLabel("Plot View:", this));
+
+    auto* plotModeCombo = new QComboBox(this);
+    plotModeCombo->addItem("Lift Curve (CL & CD vs α)");
+    plotModeCombo->addItem("Drag Polar (CL vs CD)");
+    plotModeCombo->addItem("Aerodynamic Efficiency (L/D vs α)");
+    plotModeCombo->addItem("Hydrodynamic Forces (Lift & Drag in N)");
+    connect(plotModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &PolarDialog::onPlotModeChanged);
+    plotControlLayout->addWidget(plotModeCombo, 1);
+
+    auto* showLinearFitCheck = new QCheckBox("Linear Fit", this);
+    showLinearFitCheck->setChecked(true);
+    auto* showStallCheck = new QCheckBox("Stall Peak", this);
+    showStallCheck->setChecked(true);
+    auto* showZeroLiftCheck = new QCheckBox("Zero-Lift", this);
+    showZeroLiftCheck->setChecked(true);
+
+    plotControlLayout->addWidget(showLinearFitCheck);
+    plotControlLayout->addWidget(showStallCheck);
+    plotControlLayout->addWidget(showZeroLiftCheck);
+
+    plotTabLayout->addLayout(plotControlLayout);
+
+    plotWidget = new PlotWidget(this);
+    connect(showLinearFitCheck, &QCheckBox::toggled, plotWidget, &PlotWidget::setShowLinearFit);
+    connect(showStallCheck, &QCheckBox::toggled, plotWidget, &PlotWidget::setShowStallMarker);
+    connect(showZeroLiftCheck, &QCheckBox::toggled, plotWidget, &PlotWidget::setShowZeroLift);
+    plotTabLayout->addWidget(plotWidget, 1);
+
+    auto* plotActionLayout = new QHBoxLayout();
+    exportPlotButton = new QPushButton("Save Plot Image...", this);
+    connect(exportPlotButton, &QPushButton::clicked, this, &PolarDialog::onExportPlot);
+    plotActionLayout->addWidget(exportPlotButton);
+
+    copyPlotButton = new QPushButton("Copy to Clipboard", this);
+    connect(copyPlotButton, &QPushButton::clicked, this, &PolarDialog::onCopyPlot);
+    plotActionLayout->addWidget(copyPlotButton);
+
+    plotTabLayout->addLayout(plotActionLayout);
+    tabWidget->addTab(plotTab, "Live Graphical Polar Curves");
+
+    auto* tableTab = new QWidget(this);
+    auto* tableTabLayout = new QVBoxLayout(tableTab);
+    tableTabLayout->setContentsMargins(6, 6, 6, 6);
+    tableTabLayout->setSpacing(6);
+
     resultsTable = new QTableWidget(this);
     resultsTable->setColumnCount(6);
     resultsTable->setHorizontalHeaderLabels({"Alpha (°)", "CL", "CD", "L/D", "Lift (N)", "Drag (N)"});
     resultsTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     resultsTable->setAlternatingRowColors(true);
     resultsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    mainLayout->addWidget(resultsTable, 1);
+    tableTabLayout->addWidget(resultsTable, 1);
 
     summaryLabel = new QLabel(this);
-    summaryLabel->setStyleSheet("background-color: #23232d; border: 1px solid #3a3a4c; border-radius: 4px; padding: 8px; color: #eceff4;");
+    summaryLabel->setStyleSheet("background-color: #23232d; border: 1px solid #3a3a4c; border-radius: 4px; padding: 6px; color: #eceff4;");
     summaryLabel->setText("Summary will appear here after sweep completes.");
-    mainLayout->addWidget(summaryLabel);
+    tableTabLayout->addWidget(summaryLabel);
+
+    tabWidget->addTab(tableTab, "Data Table & Summary");
+
+    mainLayout->addWidget(tabWidget, 1);
+}
+
+void PolarDialog::onPlotModeChanged(int index) {
+    if (plotWidget) {
+        plotWidget->setPlotMode(static_cast<PlotMode>(index));
+    }
+}
+
+void PolarDialog::onExportPlot() {
+    if (!plotWidget) return;
+    QString path = QFileDialog::getSaveFileName(this, "Save Polar Plot Image", "polar_plot.png", "PNG Image (*.png);;JPEG Image (*.jpg *.jpeg);;All Files (*.*)");
+    if (!path.isEmpty()) {
+        if (!path.endsWith(".png", Qt::CaseInsensitive) && !path.endsWith(".jpg", Qt::CaseInsensitive) && !path.endsWith(".jpeg", Qt::CaseInsensitive)) {
+            path += ".png";
+        }
+        if (plotWidget->exportImage(path)) {
+            statusLabel->setText("Plot image saved to " + path);
+        } else {
+            QMessageBox::warning(this, "Export Failed", "Could not save plot image to specified path.");
+        }
+    }
+}
+
+void PolarDialog::onCopyPlot() {
+    if (!plotWidget) return;
+    plotWidget->copyToClipboard();
+    statusLabel->setText("Plot image copied to clipboard.");
 }
 
 void PolarDialog::onBrowseCsv() {
@@ -390,6 +489,8 @@ void PolarDialog::onStartSweep() {
     resultsTable->setRowCount(0);
     progressBar->setValue(0);
     summaryLabel->setText("Sweeping angles of attack...");
+    if (plotWidget) plotWidget->clear();
+
     startButton->setEnabled(false);
     cancelButton->setEnabled(true);
     alphaMinSpin->setEnabled(false);
@@ -445,6 +546,10 @@ void PolarDialog::onPointCompleted(PolarPointResult res) {
     resultsTable->setItem(row, 5, new QTableWidgetItem(QString::number(res.drag_N, 'f', 2)));
 
     resultsTable->scrollToBottom();
+
+    if (plotWidget) {
+        plotWidget->addPoint(res);
+    }
 }
 
 void PolarDialog::onProgressChanged(int percent, QString message) {

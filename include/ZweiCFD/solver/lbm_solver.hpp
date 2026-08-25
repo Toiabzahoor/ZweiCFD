@@ -68,7 +68,7 @@ public:
 
   void initialize(const Flowconditions &cond);
   void enforceFreestream(const Flowconditions &cond); 
-  void computeStep(double tau); 
+  void computeStep(double tau, int windDir = 0); 
   void applyBoundaries(); 
 };
 

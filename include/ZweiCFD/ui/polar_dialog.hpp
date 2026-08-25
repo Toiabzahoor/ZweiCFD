@@ -54,6 +54,8 @@ private:
     std::atomic<bool> isCancelled{false};
 };
 
+class PlotWidget;
+
 class PolarDialog : public QDialog {
     Q_OBJECT
 public:
@@ -68,6 +70,9 @@ private slots:
     void onProgressChanged(int percent, QString message);
     void onSweepFinished(QString summary, QString csvPath);
     void onSweepError(QString message);
+    void onPlotModeChanged(int index);
+    void onExportPlot();
+    void onCopyPlot();
 
 private:
     void setupUi();
@@ -90,6 +95,10 @@ private:
     QLabel* statusLabel;
     QTableWidget* resultsTable;
     QLabel* summaryLabel;
+
+    PlotWidget* plotWidget = nullptr;
+    QPushButton* exportPlotButton = nullptr;
+    QPushButton* copyPlotButton = nullptr;
 
     QThread* workerThread = nullptr;
     PolarWorker* worker = nullptr;
